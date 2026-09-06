@@ -1,0 +1,1 @@
+package com.tradingplatform.market.websocket; import java.util.Set; public interface MarketStreamService { void connect(); void disconnect(); void subscribe(Set<String> keys); void unsubscribe(Set<String> keys); StreamStatus status(); }

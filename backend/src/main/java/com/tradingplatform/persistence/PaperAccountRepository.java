@@ -1,0 +1,1 @@
+package com.tradingplatform.persistence; import java.util.*; import org.springframework.data.jpa.repository.JpaRepository; public interface PaperAccountRepository extends JpaRepository<PaperAccountEntity,UUID>{ Optional<PaperAccountEntity> findFirstByOrderByCreatedAtAsc(); }

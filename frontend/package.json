@@ -1,0 +1,27 @@
+{
+  "name": "trading-platform-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "firebase": "^12.17.1",
+    "lightweight-charts": "^5.2.1",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-router-dom": "^7.18.2",
+    "typescript": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "jsdom": "latest",
+    "vitest": "latest"
+  }
+}

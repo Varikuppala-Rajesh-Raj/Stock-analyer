@@ -1,0 +1,275 @@
+services:
+
+  # ========================================
+  # PostgreSQL Database
+  # ========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: trading-platform-db
+
+    environment:
+      POSTGRES_DB: ${DB_NAME:-trading_platform}
+      POSTGRES_USER: ${DB_USER:-trading_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+      PGDATA: /var/lib/postgresql/data/pgdata
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+
+    networks:
+      - trading-network
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_USER:-trading_user} -d ${DB_NAME:-trading_platform}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  # ========================================
+  # Redis Cache
+  # ========================================
+  redis:
+    image: redis:7-alpine
+    container_name: trading-platform-cache
+
+    command: redis-server --appendonly yes --requirepass ""
+
+    ports:
+      - "6379:6379"
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - trading-network
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  # ========================================
+  # Spring Boot Backend
+  # ========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    container_name: trading-platform-backend
+
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8080
+
+      # PostgreSQL
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-trading_platform}
+      DB_USER: ${DB_USER:-trading_user}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      # Security
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+
+      # Python ML Service
+      PYTHON_SERVICE_URL: http://python-service:8000
+
+      # ========================================
+      # Market Data
+      # ========================================
+      MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-mock}
+
+      # Mock stream
+      MOCK_INSTRUMENT_KEY: ${MOCK_INSTRUMENT_KEY:-MOCK|NIFTY25000CE}
+      MOCK_DATA_INTERVAL_MS: ${MOCK_DATA_INTERVAL_MS:-1000}
+      MOCK_DATA_PRICES: ${MOCK_DATA_PRICES:-7.40,7.50,7.80,8.10,7.90}
+
+      # ========================================
+      # Upstox
+      # ========================================
+      UPSTOX_BASE_URL: ${UPSTOX_BASE_URL:-https://api.upstox.com}
+      UPSTOX_ACCESS_TOKEN: ${UPSTOX_ACCESS_TOKEN:-}
+      UPSTOX_CLIENT_ID: ${UPSTOX_CLIENT_ID:-}
+      UPSTOX_CLIENT_SECRET: ${UPSTOX_CLIENT_SECRET:-}
+      UPSTOX_REDIRECT_URI: ${UPSTOX_REDIRECT_URI:-}
+      UPSTOX_WEBSOCKET_ENABLED: ${UPSTOX_WEBSOCKET_ENABLED:-true}
+      UPSTOX_INSTRUMENT_MASTER_URL: ${UPSTOX_INSTRUMENT_MASTER_URL:-}
+
+      # ========================================
+      # Groq
+      # ========================================
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+
+      # ========================================
+      # Trading
+      # ========================================
+      TRADING_MODE: ${TRADING_MODE:-PAPER}
+
+      PAPER_TRADING_INITIAL_CAPITAL: ${PAPER_TRADING_INITIAL_CAPITAL:-100000}
+      PAPER_TRADING_ENABLED: ${PAPER_TRADING_ENABLED:-true}
+      PAPER_AUTO_TRADING: ${PAPER_AUTO_TRADING:-false}
+
+      INITIAL_VIRTUAL_BALANCE: ${INITIAL_VIRTUAL_BALANCE:-100000}
+
+      # ========================================
+      # Paper Risk Management
+      # ========================================
+      MAX_DAILY_LOSS: ${MAX_DAILY_LOSS:-300}
+      MAX_CAPITAL_PER_TRADE: ${MAX_CAPITAL_PER_TRADE:-5000}
+      MAX_POSITION_QUANTITY: ${MAX_POSITION_QUANTITY:-1000}
+      MAX_OPEN_POSITIONS: ${MAX_OPEN_POSITIONS:-10}
+      MAX_TRADES_PER_DAY: ${MAX_TRADES_PER_DAY:-50}
+      MAX_PRICE_AGE_SECONDS: ${MAX_PRICE_AGE_SECONDS:-30}
+
+      # ========================================
+      # Paper Trading Costs
+      # ========================================
+      PAPER_SLIPPAGE_PERCENT: ${PAPER_SLIPPAGE_PERCENT:-0}
+      PAPER_BROKERAGE_RATE: ${PAPER_BROKERAGE_RATE:-0.0003}
+
+      # ========================================
+      # Logging
+      # ========================================
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ML_MODEL_DIR: /app/models
+
+    ports:
+      - "8080:8080"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    networks:
+      - trading-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:8080/api/v1/health"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+
+  # ========================================
+  # React frontend
+  # ========================================
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+
+  #   container_name: trading-platform-frontend
+
+  #   ports:
+  #     - "5173:80"
+
+  #   depends_on:
+  #     backend:
+  #       condition: service_healthy
+
+  #   networks:
+  #     - trading-network
+
+
+  # ========================================
+  # Python ML Service
+  # ========================================
+  python-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+
+    container_name: trading-platform-ml
+
+    environment:
+      PYTHON_ENV: docker
+      SERVER_PORT: 8000
+
+      # PostgreSQL
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-trading_platform}
+      DB_USER: ${DB_USER:-trading_user}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - ml_models:/app/models
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    networks:
+      - trading-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:8000/health"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+
+# ========================================
+# Named Volumes
+# ========================================
+volumes:
+  postgres_data:
+    driver: local
+
+  redis_data:
+    driver: local
+  ml_models:
+    driver: local
+
+
+# ========================================
+# Network
+# ========================================
+networks:
+  trading-network:
+    driver: bridge

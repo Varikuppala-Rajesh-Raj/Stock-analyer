@@ -1,0 +1,49 @@
+{
+  "symbol": "NIFTY",
+  "horizonMinutes": 15,
+  "movementThresholdPercent": 0.20,
+  "rows": [
+    {
+      "features": {
+        "close": 24300,
+        "sma20": 24290,
+        "sma50": 24250,
+        "ema9": 24300,
+        "ema20": 24280,
+        "ema50": 24240,
+        "rsi14": 55,
+        "macd": 10,
+        "macdSignal": 8,
+        "macdHistogram": 2,
+        "atr14": 80,
+        "momentum": 0.3,
+        "volume": 100000,
+        "averageVolume20": 90000,
+        "volumeRatio": 1.11,
+        "volatility": 50
+      },
+      "target": "UP"
+    },
+    {
+      "features": {
+        "close": 24200,
+        "sma20": 24250,
+        "sma50": 24280,
+        "ema9": 24200,
+        "ema20": 24230,
+        "ema50": 24270,
+        "rsi14": 45,
+        "macd": -10,
+        "macdSignal": -8,
+        "macdHistogram": -2,
+        "atr14": 80,
+        "momentum": -0.3,
+        "volume": 100000,
+        "averageVolume20": 90000,
+        "volumeRatio": 1.11,
+        "volatility": 50
+      },
+      "target": "DOWN"
+    }
+  ]
+}

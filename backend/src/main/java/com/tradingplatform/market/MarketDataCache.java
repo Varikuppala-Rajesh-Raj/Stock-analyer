@@ -1,0 +1,2 @@
+package com.tradingplatform.market;
+import java.util.*; public interface MarketDataCache { Optional<Quote> getQuote(String key); void putQuote(String key,Quote quote); Optional<List<Candle>> getCandles(String key,Timeframe timeframe,String range); void putCandles(String key,Timeframe timeframe,String range,List<Candle> candles); void evictQuote(String key); void evictCandles(String key,Timeframe timeframe,String range); }

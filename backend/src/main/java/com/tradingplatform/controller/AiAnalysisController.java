@@ -1,0 +1,3 @@
+package com.tradingplatform.controller;
+import com.tradingplatform.ai.*; import com.tradingplatform.market.Timeframe; import com.tradingplatform.signal.*; import org.springframework.web.bind.annotation.*;
+@RestController @RequestMapping("/api/ai") public class AiAnalysisController { private final AnalysisService analysis; private final GroqAnalysisService groq; public AiAnalysisController(AnalysisService analysis,GroqAnalysisService groq){this.analysis=analysis;this.groq=groq;} @PostMapping("/analyze/{symbol}") public AiAnalysisResponse explain(@PathVariable String symbol,@RequestParam(defaultValue="1D") String timeframe){SignalResult quantitative=analysis.analyze(symbol,Timeframe.parse(timeframe));return groq.explain(quantitative);} }

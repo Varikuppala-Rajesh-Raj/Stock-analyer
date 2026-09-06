@@ -1,0 +1,417 @@
+# ========================================
+# Environment & Configuration
+# ========================================
+.env
+.env.local
+.env.*.local
+config/secrets.yml
+config/credentials.yml
+
+# ========================================
+# IDE & Editor
+# ========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+.code-workspace
+
+# ========================================
+# Gradle
+# ========================================
+.gradle
+/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ========================================
+# Maven
+# ========================================
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+.flattened-pom.xml
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# ========================================
+# Spring Boot
+# ========================================
+*.jar
+*.war
+*.nar
+!**/src/**/target/**
+application.properties
+application.yml
+application-*.properties
+application-*.yml
+
+# ========================================
+# Python
+# ========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.venv
+venv/
+ENV/
+env/
+.env/
+env.bak/
+venv.bak/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+.pylint.d/
+*.pickle
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ========================================
+# Node.js & npm
+# ========================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+dist/
+build/
+.next
+out/
+*.tsbuildinfo
+
+# ========================================
+# TypeScript
+# ========================================
+*.js
+!.prettierrc.js
+.eslintcache
+
+# ========================================
+# Docker
+# ========================================
+docker-compose.override.yml
+.dockerignore
+docker-build.log
+
+# ========================================
+# Database & Data
+# ========================================
+*.db
+*.sqlite
+*.sqlite3
+data/
+postgres_data/
+redis_data/
+*.sql.backup
+*.dump
+migration_*.sql
+
+# ========================================
+# Logs
+# ========================================
+logs/
+*.log
+*.log.*
+access.log
+error.log
+debug.log
+
+# ========================================
+# OS Files
+# ========================================
+.DS_Store
+Thumbs.db
+thumbs.db
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# ========================================
+# Temporary Files
+# ========================================
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+.tmp/
+temp/
+tmp/
+
+# ========================================
+# Credentials & Secrets
+# ========================================
+**/secrets/
+**/credentials/
+*.key
+*.pem
+*.p12
+*.pfx
+**/AWS_CREDENTIALS
+**/google_credentials.json
+**/azure_credentials.json
+api_keys.txt
+secrets.txt
+.aws/
+.ssh/
+
+# ========================================
+# Certificates & Keys
+# ========================================
+*.crt
+*.cert
+*.key
+*.p7b
+*.pfx
+*.p12
+
+# ========================================
+# IDE Specific
+# ========================================
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Atom
+.atom/
+
+# Vim
+.vim/
+*~
+.netrwhist
+*~
+
+# Eclipse
+.settings/
+.classpath
+.project
+.pydevproject
+.c9/
+
+# VS
+.vs/
+.vscode-test/
+
+# ========================================
+# Build Artifacts
+# ========================================
+dist/
+build/
+*.egg-info/
+.tox/
+.pytest_cache/
+.coverage
+.hypothesis/
+htmlcov/
+
+# ========================================
+# CI/CD
+# ========================================
+.github/workflows/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile.bak
+.circleci/
+
+# ========================================
+# Documentation
+# ========================================
+docs/_build/
+docs/.doctrees/
+site/
+
+# ========================================
+# OS-specific
+# ========================================
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.AppleDouble
+.LSOverride
+._*
+.DS_Store
+.localized
+.Spotlight-V100
+.Trashes
+
+# Linux
+.Xauthority
+.Xdefaults
+
+# ========================================
+# Development Tools
+# ========================================
+.editorconfig
+.prettierignore
+.eslintignore
+.gitattributes
+
+# ========================================
+# Backups
+# ========================================
+*.backup
+*.bak
+*.old
+*.orig
+*.~[0-9]
+*~*
+
+# ========================================
+# Archives
+# ========================================
+*.zip
+*.tar
+*.tar.gz
+*.tar.bz2
+*.7z
+*.rar
+
+# ========================================
+# Platform-specific
+# ========================================
+.gradle/
+.m2/
+.composer/
+
+# ========================================
+# Virtual Environments
+# ========================================
+.venv/
+venv/
+ENV/
+env/
+.env
+env.bak/
+venv.bak/
+
+# ========================================
+# Runtime Files
+# ========================================
+*.pid
+*.sock
+*.log
+nohup.out
+.bash_history
+.zsh_history
+.history
+
+# ========================================
+# Generated Files (keep these patterns loose)
+# ========================================
+.generated/
+generated/
+src/main/generated/
+src/test/generated/
+
+# ========================================
+# Test Coverage
+# ========================================
+coverage/
+.nyc_output/
+coverage.xml
+*.lcov
+
+# ========================================
+# Performance
+# ========================================
+.jprofile
+.jprofiler/
+*.jps
+
+# ========================================
+# Mobile
+# ========================================
+android/
+ios/
+.gradle/
+build/
+*.iml
+
+# ========================================
+# AI/ML Artifacts (keep source, ignore models & data)
+# ========================================
+*.h5
+*.pkl
+*.pickle
+*.joblib
+*.npy
+*.npz
+.ipynb_checkpoints/
+*.ipynb
+!notebooks/examples/
+ml-service/models/trained/
+ml-service/data/cache/
+
+# ========================================
+# Keep These (whitelist)
+# ========================================
+!.gitkeep
+!.gitignore
+!.github/
+!.editorconfig
+!.prettierrc*
+!.eslintrc*
+!.env.example
+!README.md
+!ARCHITECTURE.md
+!LICENSE
