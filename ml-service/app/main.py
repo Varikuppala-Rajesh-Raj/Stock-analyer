@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 import os
+import math
 import traceback
 from app.option_magnitude_v2 import router as option_magnitude_v2_router
+from app.registry import ModelRegistry
 import joblib
 import numpy as np
 
@@ -33,6 +35,7 @@ app = FastAPI(
 )
 
 app.include_router(option_magnitude_v2_router)
+registry = ModelRegistry()
 
 
 # ============================================================
@@ -99,6 +102,8 @@ DIRECTION_MODEL_FILE = (
 MAGNITUDE_MODEL_FILE = (
     MODEL_DIR / "nifty_magnitude_model.joblib"
 )
+VOLATILITY_MODEL_FILE = MODEL_DIR / "nifty_volatility_model.joblib"
+OPENING_MODEL_FILE = MODEL_DIR / "nifty_opening_model.joblib"
 OPTION_FEATURE_SCHEMA_VERSION = "nifty-option-features-v1"
 OPTION_FEATURE_NAMES = FEATURE_NAMES + [
     "strike", "option_type_encoded", "distance_from_atm_percent", "moneyness",
@@ -168,6 +173,16 @@ class PredictionRequest(BaseModel):
     technical_features: dict[str, float]
 
 
+class ContextPredictionRequest(BaseModel):
+
+    symbol: Literal["NIFTY"]
+    horizon_minutes: int = Field(ge=5, le=390)
+    movement_threshold_percent: float = Field(gt=0, le=5)
+    timestamp: datetime
+    feature_schema_version: str
+    context_features: dict[str, float]
+
+
 # ============================================================
 # MAGNITUDE REQUEST MODELS
 # ============================================================
@@ -192,6 +207,45 @@ class MagnitudeTrainingRequest(BaseModel):
     )
 
 
+class VolatilityTrainingRow(BaseModel):
+    timestamp: datetime
+    features: dict[str, float]
+    target_volatility: float
+
+
+class VolatilityTrainingRequest(BaseModel):
+    symbol: Literal["NIFTY"]
+    horizon_minutes: int = Field(ge=5, le=390)
+    feature_schema_version: str
+    training_rows: list[VolatilityTrainingRow] = Field(min_length=1)
+
+
+class VolatilityPredictionRequest(BaseModel):
+    symbol: Literal["NIFTY"]
+    horizon_minutes: int = Field(ge=5, le=390)
+    feature_schema_version: str
+    technical_features: dict[str, float]
+
+
+class OpeningTrainingRow(BaseModel):
+    timestamp: datetime
+    features: dict[str, float]
+    target_open_return_percent: float
+    target_direction: Literal["UP", "DOWN", "FLAT"]
+
+
+class OpeningTrainingRequest(BaseModel):
+    symbol: Literal["NIFTY"]
+    feature_schema_version: str
+    training_rows: list[OpeningTrainingRow] = Field(min_length=1)
+
+
+class OpeningPredictionRequest(BaseModel):
+    symbol: Literal["NIFTY"]
+    feature_schema_version: str
+    technical_features: dict[str, float]
+
+
 class OptionMagnitudeTrainingRow(BaseModel):
     timestamp: datetime
     features: dict[str, float]
@@ -212,6 +266,22 @@ class OptionMagnitudePredictionRequest(BaseModel):
     option_features: dict[str, float]
 
 
+class RegistryEntryRequest(BaseModel):
+    modelName: str
+    modelVersion: str
+    featureSchemaVersion: str
+    trainingTimestamp: datetime
+    trainingStartTimestamp: datetime | None = None
+    trainingEndTimestamp: datetime | None = None
+    validationMetrics: dict[str, float] = {}
+    status: str = "TRAINING"
+
+
+class RegistryPromotionRequest(BaseModel):
+    modelName: str
+    modelVersion: str
+
+
 # ============================================================
 # IN-MEMORY MODELS / METADATA
 # ============================================================
@@ -227,6 +297,16 @@ metadata: dict = {
 magnitude_model = None
 
 magnitude_metadata: dict = {
+    "status": "MODEL_NOT_TRAINED",
+    "modelVersion": None,
+}
+volatility_model = None
+volatility_metadata: dict = {
+    "status": "MODEL_NOT_TRAINED",
+    "modelVersion": None,
+}
+opening_model = None
+opening_metadata: dict = {
     "status": "MODEL_NOT_TRAINED",
     "modelVersion": None,
 }
@@ -414,6 +494,42 @@ def load_persisted_magnitude_model() -> None:
         }
 
 
+def load_persisted_volatility_model() -> None:
+    global volatility_model, volatility_metadata
+    if not VOLATILITY_MODEL_FILE.exists():
+        return
+    try:
+        saved = joblib.load(VOLATILITY_MODEL_FILE)
+        if saved.get("featureSchemaVersion") == FEATURE_SCHEMA_VERSION:
+            volatility_model = saved["model"]
+            volatility_metadata = saved["metadata"]
+            volatility_metadata["status"] = "READY"
+    except Exception as error:
+        volatility_metadata = {
+            "status": "ERROR",
+            "modelVersion": None,
+            "message": f"Unable to load volatility model: {error}",
+        }
+
+
+def load_persisted_opening_model() -> None:
+    global opening_model, opening_metadata
+    if not OPENING_MODEL_FILE.exists():
+        return
+    try:
+        saved = joblib.load(OPENING_MODEL_FILE)
+        if saved.get("featureSchemaVersion") == FEATURE_SCHEMA_VERSION:
+            opening_model = saved["model"]
+            opening_metadata = saved["metadata"]
+            opening_metadata["status"] = "READY"
+    except Exception as error:
+        opening_metadata = {
+            "status": "ERROR",
+            "modelVersion": None,
+            "message": f"Unable to load opening model: {error}",
+        }
+
+
 # ============================================================
 # STARTUP
 # ============================================================
@@ -426,6 +542,8 @@ def startup() -> None:
 
     load_persisted_magnitude_model()
     load_persisted_option_magnitude_model()
+    load_persisted_volatility_model()
+    load_persisted_opening_model()
 
 
 # ============================================================
@@ -443,6 +561,29 @@ def health() -> dict:
             timezone.utc
         ),
     }
+
+
+@app.get("/api/v1/models/registry")
+def model_registry() -> list[dict]:
+    return registry.list()
+
+
+@app.post("/api/v1/models/registry")
+def register_model(request: RegistryEntryRequest) -> dict:
+    try:
+        return registry.register(request.model_dump(mode="json"))
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/api/v1/models/registry/promote")
+def promote_model(request: RegistryPromotionRequest) -> dict:
+    try:
+        return registry.promote(request.modelName, request.modelVersion)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 # ============================================================
@@ -465,6 +606,16 @@ def status() -> dict:
 def magnitude_status() -> dict:
 
     return magnitude_metadata
+
+
+@app.get("/api/v1/nifty/volatility/status")
+def volatility_status() -> dict:
+    return volatility_metadata
+
+
+@app.get("/api/v1/nifty/opening/status")
+def opening_status() -> dict:
+    return opening_metadata
 
 
 @app.get("/api/v1/nifty/options/magnitude/status")
@@ -837,6 +988,125 @@ def train_option_magnitude(
             status_code=500,
             detail=str(error)
         ) from error
+# ============================================================
+# VOLATILITY MODEL TRAINING
+# ============================================================
+
+
+@app.post("/api/v1/nifty/volatility/train")
+def train_volatility(request: VolatilityTrainingRequest) -> dict:
+    global volatility_model, volatility_metadata
+    rows = sorted(request.training_rows, key=lambda row: row.timestamp)
+    if len(rows) < 20:
+        raise HTTPException(status_code=422, detail="At least 20 volatility training rows are required.")
+    validated = [validate_schema(request.feature_schema_version, row.features) for row in rows]
+    targets = np.asarray([row.target_volatility for row in rows], dtype=float)
+    if not np.all(np.isfinite(targets)) or np.any(targets < 0):
+        raise HTTPException(status_code=422, detail="Volatility targets must be finite and non-negative.")
+    timestamps = sorted({row.timestamp for row in rows})
+    split = int(len(timestamps) * 0.8)
+    if split <= 0 or split >= len(timestamps):
+        raise HTTPException(status_code=422, detail="Chronological validation partition is invalid.")
+    train_times = set(timestamps[:split])
+    validation_times = set(timestamps[split:])
+    train_indices = [index for index, row in enumerate(rows) if row.timestamp in train_times]
+    validation_indices = [index for index, row in enumerate(rows) if row.timestamp in validation_times]
+    if not train_indices or not validation_indices:
+        raise HTTPException(status_code=422, detail="Chronological split produced an empty partition.")
+
+    volatility_metadata = {"status": "TRAINING", "modelVersion": None}
+    trained = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+    trained.fit(np.vstack(validated)[train_indices], targets[train_indices])
+    predicted = trained.predict(np.vstack(validated)[validation_indices])
+    mae = mean_absolute_error(targets[validation_indices], predicted)
+    rmse = mean_squared_error(targets[validation_indices], predicted) ** 0.5
+    model_version = f"nifty-volatility-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    volatility_model = trained
+    volatility_metadata = {
+        "status": "READY",
+        "modelVersion": model_version,
+        "featureSchemaVersion": FEATURE_SCHEMA_VERSION,
+        "horizonMinutes": request.horizon_minutes,
+        "trainingRows": len(rows),
+        "trainingStartTimestamp": min(train_times).isoformat(),
+        "trainingEndTimestamp": max(train_times).isoformat(),
+        "validationStartTimestamp": min(validation_times).isoformat(),
+        "validationEndTimestamp": max(validation_times).isoformat(),
+        "validationMethod": "chronological timestamp 80/20 holdout",
+        "target": "future_volatility",
+        "validationMetrics": {"mae": round(float(mae), 6), "rmse": round(float(rmse), 6)},
+    }
+    VOLATILITY_MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"model": trained, "metadata": volatility_metadata,
+                 "featureSchemaVersion": FEATURE_SCHEMA_VERSION}, VOLATILITY_MODEL_FILE)
+    return volatility_metadata
+
+
+# ============================================================
+# NEXT-SESSION OPENING MODEL TRAINING
+# ============================================================
+
+
+@app.post("/api/v1/nifty/opening/train")
+def train_opening(request: OpeningTrainingRequest) -> dict:
+    global opening_model, opening_metadata
+    rows = sorted(request.training_rows, key=lambda row: row.timestamp)
+    if len(rows) < 30:
+        raise HTTPException(status_code=422, detail="At least 30 opening training rows are required.")
+    validated = [validate_schema(request.feature_schema_version, row.features) for row in rows]
+    targets = np.asarray([row.target_open_return_percent for row in rows], dtype=float)
+    directions = np.asarray([row.target_direction for row in rows])
+    if not np.all(np.isfinite(targets)) or not np.all(targets > -100):
+        raise HTTPException(status_code=422, detail="Opening return targets must be finite and greater than -100%.")
+    if len(set(directions)) < 2:
+        raise HTTPException(status_code=422, detail="At least two opening direction classes are required.")
+    timestamps = sorted({row.timestamp for row in rows})
+    split = int(len(timestamps) * 0.8)
+    if split <= 0 or split >= len(timestamps):
+        raise HTTPException(status_code=422, detail="Chronological validation partition is invalid.")
+    train_times = set(timestamps[:split])
+    validation_times = set(timestamps[split:])
+    train_indices = [index for index, row in enumerate(rows) if row.timestamp in train_times]
+    validation_indices = [index for index, row in enumerate(rows) if row.timestamp in validation_times]
+    if not train_indices or not validation_indices:
+        raise HTTPException(status_code=422, detail="Chronological split produced an empty partition.")
+    matrix = np.vstack(validated)
+    gap_model = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+    direction_model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
+    gap_model.fit(matrix[train_indices], targets[train_indices])
+    direction_model.fit(matrix[train_indices], directions[train_indices])
+    predicted_gap = gap_model.predict(matrix[validation_indices])
+    predicted_direction = direction_model.predict(matrix[validation_indices])
+    gap_mae = mean_absolute_error(targets[validation_indices], predicted_gap)
+    gap_rmse = mean_squared_error(targets[validation_indices], predicted_gap) ** 0.5
+    direction_accuracy = accuracy_score(directions[validation_indices], predicted_direction)
+    direction_f1 = f1_score(directions[validation_indices], predicted_direction, average="macro", zero_division=0)
+    model_version = f"nifty-opening-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    opening_model = {"gap": gap_model, "direction": direction_model}
+    opening_metadata = {
+        "status": "READY",
+        "modelVersion": model_version,
+        "featureSchemaVersion": FEATURE_SCHEMA_VERSION,
+        "trainingRows": len(rows),
+        "trainingStartTimestamp": min(train_times).isoformat(),
+        "trainingEndTimestamp": max(train_times).isoformat(),
+        "validationStartTimestamp": min(validation_times).isoformat(),
+        "validationEndTimestamp": max(validation_times).isoformat(),
+        "validationMethod": "chronological timestamp 80/20 holdout",
+        "targets": ["tomorrow_open_return_percent", "tomorrow_open_direction"],
+        "validationMetrics": {
+            "gapMaePercent": round(float(gap_mae), 6),
+            "gapRmsePercent": round(float(gap_rmse), 6),
+            "directionAccuracy": round(float(direction_accuracy), 6),
+            "directionMacroF1": round(float(direction_f1), 6),
+        },
+    }
+    OPENING_MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"model": opening_model, "metadata": opening_metadata,
+                 "featureSchemaVersion": FEATURE_SCHEMA_VERSION}, OPENING_MODEL_FILE)
+    return opening_metadata
+
+
 # ============================================================
 # DIRECTION MODEL TRAINING
 # ============================================================
@@ -1849,6 +2119,67 @@ def train_magnitude(
 # ============================================================
 # DIRECTION MODEL PREDICTION
 # ============================================================
+
+
+@app.post("/api/v1/nifty/volatility/predict")
+def predict_volatility(request: VolatilityPredictionRequest) -> dict:
+    if volatility_model is None or volatility_metadata.get("status") != "READY":
+        raise HTTPException(status_code=409, detail="VOLATILITY_MODEL_NOT_TRAINED")
+    if request.horizon_minutes != volatility_metadata.get("horizonMinutes"):
+        raise HTTPException(status_code=409, detail="MODEL_HORIZON_MISMATCH")
+    values = validate_schema(request.feature_schema_version, request.technical_features).reshape(1, -1)
+    predicted = max(0.0, float(volatility_model.predict(values)[0]))
+    return {
+        "symbol": request.symbol,
+        "timestamp": datetime.now(timezone.utc),
+        "horizonMinutes": request.horizon_minutes,
+        "predictedVolatility": round(predicted, 6),
+        "modelVersion": volatility_metadata["modelVersion"],
+        "featureSchemaVersion": FEATURE_SCHEMA_VERSION,
+    }
+
+
+@app.post("/api/v1/nifty/opening/predict")
+def predict_opening(request: OpeningPredictionRequest) -> dict:
+    if opening_model is None or opening_metadata.get("status") != "READY":
+        raise HTTPException(status_code=409, detail="OPENING_MODEL_NOT_TRAINED")
+    values = validate_schema(request.feature_schema_version, request.technical_features).reshape(1, -1)
+    gap = float(opening_model["gap"].predict(values)[0])
+    probabilities = {label: 0.0 for label in ("DOWN", "FLAT", "UP")}
+    for label, probability in zip(opening_model["direction"].classes_, opening_model["direction"].predict_proba(values)[0]):
+        probabilities[str(label)] = round(float(probability), 6)
+    direction = max(probabilities, key=probabilities.get)
+    return {
+        "symbol": request.symbol,
+        "timestamp": datetime.now(timezone.utc),
+        "direction": direction,
+        "probabilities": probabilities,
+        "expectedGapPercent": round(gap, 6),
+        "confidence": round(probabilities[direction], 6),
+        "modelVersion": opening_metadata["modelVersion"],
+        "featureSchemaVersion": FEATURE_SCHEMA_VERSION,
+    }
+
+
+@app.post("/api/v1/nifty/context/predict")
+def predict_context(request: ContextPredictionRequest) -> dict:
+    """Validate the future context contract until a context-trained model exists."""
+    if request.feature_schema_version != "nifty-context-features-v1":
+        raise HTTPException(
+            status_code=422,
+            detail="Unsupported context feature schema.",
+        )
+    if not request.context_features or not all(
+        math.isfinite(value) for value in request.context_features.values()
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Context features must contain finite numbers.",
+        )
+    raise HTTPException(
+        status_code=409,
+        detail="CONTEXT_MODEL_NOT_TRAINED",
+    )
 
 
 @app.post("/api/v1/nifty/predict")

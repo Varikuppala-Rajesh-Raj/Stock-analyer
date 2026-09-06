@@ -4,6 +4,10 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tradingplatform.market.Candle;
+import com.tradingplatform.market.context.FeatureEngine;
+import com.tradingplatform.market.context.MarketContext;
+import com.tradingplatform.market.context.UnifiedFeatureSchema;
+import com.tradingplatform.market.context.UnifiedFeatureVector;
 import com.tradingplatform.signal.TechnicalAnalysisResult;
 import com.tradingplatform.market.indicators.CanonicalTechnicalFeatures;
 
@@ -226,6 +230,46 @@ public class MlPredictionService {
                 technicalFeatures
         );
     }
+
+        /** Sends prepared context features to the separately versioned context endpoint. */
+        public JsonNode predictNiftyFromContext(
+                        int horizonMinutes,
+                        double thresholdPercent,
+                        UnifiedFeatureVector featureVector
+        ) {
+                if (featureVector == null || featureVector.features().isEmpty()) {
+                        throw new IllegalArgumentException("Context features cannot be empty.");
+                }
+                if (!UnifiedFeatureSchema.VERSION.equals(featureVector.schemaVersion())) {
+                        throw new IllegalArgumentException("Unsupported unified feature schema: " + featureVector.schemaVersion());
+                }
+
+                ContextPredictionRequest request = new ContextPredictionRequest(
+                                "NIFTY", horizonMinutes, thresholdPercent, featureVector.timestamp(),
+                                featureVector.schemaVersion(), featureVector.features());
+                try {
+                        String json = objectMapper.writeValueAsString(request);
+                        return restClient.post()
+                                        .uri("/api/v1/nifty/context/predict")
+                                        .contentType(MediaType.APPLICATION_JSON)
+                                        .body(json.getBytes(StandardCharsets.UTF_8))
+                                        .retrieve()
+                                        .body(JsonNode.class);
+                } catch (JsonProcessingException e) {
+                        throw new IllegalStateException("Failed to serialize context ML prediction request.", e);
+                } catch (RestClientResponseException e) {
+                        throw new IllegalStateException("Python context ML service rejected prediction request: "
+                                        + e.getResponseBodyAsString(), e);
+                }
+        }
+
+        public JsonNode predictNiftyFromContext(
+                        int horizonMinutes,
+                        double thresholdPercent,
+                        MarketContext context
+        ) {
+                return predictNiftyFromContext(horizonMinutes, thresholdPercent, FeatureEngine.flatten(context));
+        }
 
     private JsonNode predictNifty(
             List<Candle> candles,
@@ -867,6 +911,16 @@ System.out.println(json);
 
             Map<String, Double> technical_features
 
+    ) {
+    }
+
+    public record ContextPredictionRequest(
+            String symbol,
+            int horizon_minutes,
+            double movement_threshold_percent,
+            java.time.Instant timestamp,
+            String feature_schema_version,
+            Map<String, Double> context_features
     ) {
     }
 

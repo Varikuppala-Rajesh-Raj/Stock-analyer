@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNiftyPrediction, useTrainNifty,useModelStatus } from '../services/hooks';
+import { api } from '../services/api';
 
 export function MlLab() {
   const [train, setTrain] = useState('60');
@@ -25,6 +26,16 @@ const {
     loading: training,
     error: trainError
   } = useTrainNifty();
+  const [history, setHistory] = useState<Record<string, unknown>[]>([]);
+  const [historyError, setHistoryError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void api.predictionHistory()
+      .then(rows => { if (active) setHistory(rows.slice(0, 8)); })
+      .catch(error => { if (active) setHistoryError(error instanceof Error ? error.message : 'Prediction history is unavailable.'); });
+    return () => { active = false; };
+  }, [prediction]);
 const runTraining = async () => {
   try {
     await trainNifty(Number(train));
@@ -228,6 +239,39 @@ const runPrediction = async () => {
     </small>
   </section>
 )}
+        {prediction && (
+          <section className="panel">
+            <div className="panel-title">
+              <div>
+                <small>FORECAST SNAPSHOT</small>
+                <h2>Next {String(prediction.horizonMinutes ?? 15)} minutes</h2>
+              </div>
+              <span className={`pill ${String(prediction.prediction ?? '').toLowerCase()}`}>
+                {String(prediction.prediction ?? 'UNAVAILABLE')}
+              </span>
+            </div>
+            <div className="stats">
+              <div className="card"><span>UP probability</span><b>{prediction.probabilities?.UP != null ? `${(Number(prediction.probabilities.UP) * 100).toFixed(1)}%` : '—'}</b></div>
+              <div className="card"><span>DOWN probability</span><b>{prediction.probabilities?.DOWN != null ? `${(Number(prediction.probabilities.DOWN) * 100).toFixed(1)}%` : '—'}</b></div>
+              <div className="card"><span>Expected return</span><b>{prediction.predictedReturnPercent != null ? `${Number(prediction.predictedReturnPercent).toFixed(2)}%` : '—'}</b></div>
+              <div className="card"><span>Model version</span><b>{String(prediction.modelVersion ?? '—')}</b></div>
+            </div>
+          </section>
+        )}
+        <section className="panel backend-table">
+          <div className="panel-title">
+            <div><small>PREDICTION HISTORY</small><h2>Recent forecasts</h2></div>
+            <span className="pill">EVALUATION</span>
+          </div>
+          {historyError ? <p className="api-state error">{historyError}</p> : history.length === 0 ? <p className="api-state">No persisted predictions are available yet.</p> : history.map((item, index) => (
+            <div className="api-row" key={String(item.id ?? index)}>
+              <b>{String(item.prediction ?? '—')}</b>
+              <span>{String(item.horizonMinutes ?? '—')} min</span>
+              <span>{item.predictedReturnPercent != null ? `${Number(item.predictedReturnPercent).toFixed(2)}%` : '—'}</span>
+              <small>{item.outcomeCorrect == null ? 'Awaiting outcome' : item.outcomeCorrect ? 'Correct' : 'Incorrect'}</small>
+            </div>
+          ))}
+        </section>
         <section className="panel note">
           <small>WHY THIS MATTERS</small>
           <h2>Test only what the model could have known.</h2>

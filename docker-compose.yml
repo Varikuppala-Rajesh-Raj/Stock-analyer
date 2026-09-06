@@ -15,7 +15,7 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
 
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -42,10 +42,10 @@ services:
     image: redis:7-alpine
     container_name: trading-platform-cache
 
-    command: redis-server --appendonly yes --requirepass ""
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
 
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
     volumes:
       - redis_data:/data
@@ -84,6 +84,7 @@ services:
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
 
       # Security
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}

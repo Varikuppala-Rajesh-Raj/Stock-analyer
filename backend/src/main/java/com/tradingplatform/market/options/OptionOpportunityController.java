@@ -116,7 +116,9 @@ public class OptionOpportunityController {
         double expectedReturnPercent =
                 magnitudeResult
                         .path("predictedReturnPercent")
-                        .asDouble(0.0);
+                        .asDouble(Double.NaN);
+
+        OptionForecastGuard.requireUsable(directionResult, expectedReturnPercent);
 
         JsonNode optionModelStatus = mlPredictionService.optionMagnitudeModelStatus();
         boolean optionReturnModelReady = "READY".equalsIgnoreCase(

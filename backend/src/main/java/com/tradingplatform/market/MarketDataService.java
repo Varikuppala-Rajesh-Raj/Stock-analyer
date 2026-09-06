@@ -13,17 +13,18 @@ import org.springframework.stereotype.Service;
 public class MarketDataService {
  private static final int ANALYSIS_MINIMUM_CANDLES = 60;
  private final InstrumentCatalogService catalog; private final MarketDataProvider provider; private final MarketDataCache cache; private final CandlePersistenceService persistence;
- private final int analysisHistoryDays; private final int analysisWindowCandles;
+ private final int analysisHistoryDays; private final int analysisWindowCandles; private final java.time.Duration quoteMaxAge;
  public MarketDataService(InstrumentCatalogService catalog, UpstoxMarketDataProvider upstox, MockMarketDataProvider mock,
                           MarketDataCache cache, CandlePersistenceService persistence,
                           @Value("${trading.MARKET_DATA_PROVIDER}") String selected,
                           @Value("${trading.analysis.intraday-history-days:10}") int analysisHistoryDays,
-                          @Value("${trading.analysis.intraday-window-candles:500}") int analysisWindowCandles) {
+                          @Value("${trading.analysis.intraday-window-candles:500}") int analysisWindowCandles,
+                          @Value("${trading.market-data.quote-max-age-seconds:300}") long quoteMaxAgeSeconds) {
   this.catalog=catalog; this.provider="upstox".equalsIgnoreCase(selected) ? upstox : mock; this.cache=cache; this.persistence=persistence;
-  this.analysisHistoryDays=analysisHistoryDays; this.analysisWindowCandles=analysisWindowCandles;
+  this.analysisHistoryDays=analysisHistoryDays; this.analysisWindowCandles=analysisWindowCandles; this.quoteMaxAge=java.time.Duration.ofSeconds(quoteMaxAgeSeconds);
  }
  public Instrument instrument(String symbol) { return catalog.resolveSymbol(symbol); }
- public Quote quote(String symbol) { Instrument i=instrument(symbol); return cache.getQuote(i.instrumentKey()).orElseGet(()->{Quote q=provider.getQuote(i);cache.putQuote(i.instrumentKey(),q);return q;}); }
+ public Quote quote(String symbol) { Instrument i=instrument(symbol); return cache.getQuote(i.instrumentKey()).orElseGet(()->{Quote q=provider.getQuote(i); if (MarketDataNormalizer.isQuoteStale(q, quoteMaxAge)) throw new MarketDataUnavailableException("Quote for "+symbol+" is stale; data age exceeds configured maximum of "+quoteMaxAge.getSeconds()+" seconds."); cache.putQuote(i.instrumentKey(),q);return q;}); }
  public List<Candle> history(String symbol, Timeframe timeframe, LocalDate from, LocalDate to) { Instrument i=instrument(symbol);String range=from+":"+to;return cache.getCandles(i.instrumentKey(),timeframe,range).orElseGet(()->{List<Candle> persisted=normalise(persistence.find(i.instrumentKey(),timeframe,from,to));int required=timeframe==Timeframe.M5?100:1;if(persisted.size()>=required){cache.putCandles(i.instrumentKey(),timeframe,range,persisted);return persisted;}List<Candle> c=normalise(provider.getHistoricalCandles(i.instrumentKey(),timeframe,from,to));if(c.isEmpty())throw new MarketDataUnavailableException("No historical "+timeframe+" candles are available for "+symbol);persistence.upsert(i.instrumentKey(),timeframe,c);cache.putCandles(i.instrumentKey(),timeframe,range,c);return c;}); }
 
  /** Cache-first intraday retrieval that returns a window suitable for technical analysis. */
@@ -67,15 +68,12 @@ public class MarketDataService {
  }
  private List<Candle> merge(List<Candle> historical, List<Candle> latest) {
   Map<java.time.Instant,Candle> byTimestamp=new LinkedHashMap<>();
-  normalise(historical).forEach(candle -> byTimestamp.put(candle.timestamp(),candle));
-  normalise(latest).forEach(candle -> byTimestamp.put(candle.timestamp(),candle));
+  MarketDataNormalizer.normalizeCandles(historical).forEach(candle -> byTimestamp.put(candle.timestamp(),candle));
+  MarketDataNormalizer.normalizeCandles(latest).forEach(candle -> byTimestamp.put(candle.timestamp(),candle));
   return new ArrayList<>(byTimestamp.values());
  }
  private List<Candle> normalise(List<Candle> candles) {
-  if (candles == null) return List.of();
-  Map<java.time.Instant,Candle> byTimestamp=new LinkedHashMap<>();
-  candles.stream().sorted(Comparator.comparing(Candle::timestamp)).forEach(candle -> byTimestamp.put(candle.timestamp(),candle));
-  return new ArrayList<>(byTimestamp.values());
+  return MarketDataNormalizer.normalizeCandles(candles);
  }
  private List<Candle> recentWindow(List<Candle> candles) {
   List<Candle> ordered=normalise(candles); int from=Math.max(0,ordered.size()-analysisWindowCandles);

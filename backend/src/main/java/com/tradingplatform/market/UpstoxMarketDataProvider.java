@@ -45,18 +45,6 @@ public class UpstoxMarketDataProvider implements MarketDataProvider {
         this.json = json;
         this.baseUrl = baseUrl;
         this.token = token;
-
-        System.out.println("========== UPSTOX REST CONFIG ==========");
-        System.out.println("Base URL       : " + baseUrl);
-        System.out.println(
-                "Token present  : " +
-                (token != null && !token.isBlank())
-        );
-        System.out.println(
-                "Token length   : " +
-                (token == null ? 0 : token.length())
-        );
-        System.out.println("=========================================");
     }
 
     @Override
@@ -368,11 +356,7 @@ public class UpstoxMarketDataProvider implements MarketDataProvider {
             }
         }
 
-        result.sort(
-                Comparator.comparing(
-                        Candle::timestamp
-                )
-        );
+        result = new ArrayList<>(MarketDataNormalizer.normalizeCandles(result));
 
         if (result.isEmpty()) {
 
