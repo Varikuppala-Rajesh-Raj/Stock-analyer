@@ -13,10 +13,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8"
       PGDATA: /var/lib/postgresql/data/pgdata
-
-    ports:
-      - "127.0.0.1:5432:5432"
-
+      
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./data/init.sql:/docker-entrypoint-initdb.d/01-init.sql
@@ -123,6 +120,14 @@ services:
       # Trading
       # ========================================
       TRADING_MODE: ${TRADING_MODE:-PAPER}
+
+      # News intelligence
+      NEWS_PROVIDER: ${NEWS_PROVIDER:-marketaux}
+      NEWS_API_KEY: ${NEWS_API_KEY:-}
+      MARKETAUX_BASE_URL: ${MARKETAUX_BASE_URL:-https://api.marketaux.com}
+      NEWS_COUNTRY: ${NEWS_COUNTRY:-in}
+      NEWS_LANGUAGE: ${NEWS_LANGUAGE:-en}
+      NEWS_LIMIT: ${NEWS_LIMIT:-3}
 
       PAPER_TRADING_INITIAL_CAPITAL: ${PAPER_TRADING_INITIAL_CAPITAL:-100000}
       PAPER_TRADING_ENABLED: ${PAPER_TRADING_ENABLED:-true}
