@@ -7,6 +7,7 @@ import com.tradingplatform.market.Candle;
 import com.tradingplatform.market.MarketDataService;
 import com.tradingplatform.market.Timeframe;
 import com.tradingplatform.market.ml.MlPredictionService;
+import com.tradingplatform.market.ml.TrainingDatasetAuditService;
 import com.tradingplatform.market.ml.TrainingDatasetService;
 import com.tradingplatform.market.ml.TrainingExample;
 import com.tradingplatform.market.options.OptionTrainingDatasetService;
@@ -17,9 +18,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.io.Console;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -54,6 +57,7 @@ public class MlController {
     private final ObjectMapper objectMapper;
     private final AnalysisService analysis;
     private final TrainingDatasetService datasets;
+        private final TrainingDatasetAuditService datasetAudits;
     private final OptionTrainingDatasetService optionDatasets;
 
     public MlController(
@@ -61,13 +65,16 @@ public class MlController {
             MarketDataService market,
             ObjectMapper objectMapper,
             AnalysisService analysis,
-            TrainingDatasetService datasets, OptionTrainingDatasetService optionDatasets
+            TrainingDatasetService datasets,
+            TrainingDatasetAuditService datasetAudits,
+            OptionTrainingDatasetService optionDatasets
     ) {
         this.ml = ml;
         this.market = market;
         this.objectMapper = objectMapper;
         this.analysis = analysis;
         this.datasets = datasets;
+        this.datasetAudits = datasetAudits;
         this.optionDatasets = optionDatasets;
     }
 
@@ -90,6 +97,24 @@ public class MlController {
         return ml.trainNiftyOptionMagnitude(horizonMinutes, optionDatasets.generate(horizonMinutes));
     }
 
+    @PostMapping("/audit/nifty")
+    public Map<String, Object> auditNifty(
+            @RequestParam(defaultValue = "365") int days,
+            @RequestParam(defaultValue = "15") int horizonMinutes
+    ) {
+        validateTrainingRange(days, horizonMinutes);
+        Timeframe timeframe = Timeframe.M5;
+        LocalDate to = LocalDate.now(ZoneId.of("Asia/Kolkata")).minusDays(1);
+        LocalDate from = to.minusDays(days - 1L);
+        int horizonCandles = horizonMinutes / 5;
+        BigDecimal threshold = new BigDecimal("0.20");
+        MarketDataService.TrainingHistory history = market.fetchHistoricalTrainingData(
+                NIFTY, timeframe, from, to);
+        List<TrainingExample> examples = datasets.generate(
+                history.candles(), horizonCandles, threshold);
+        return auditReport(from, to, history, examples, horizonCandles, horizonMinutes, threshold);
+    }
+
     /**
      * Train NIFTY model using historical M5 candles.
      *
@@ -101,7 +126,7 @@ public class MlController {
      */
    @PostMapping("/train/nifty")
 public ResponseEntity<JsonNode> trainNifty(
-        @RequestParam(defaultValue = "30")
+        @RequestParam(defaultValue = "365")
         int days,
         @RequestParam(defaultValue = "15")
         int horizonMinutes
@@ -109,33 +134,18 @@ public ResponseEntity<JsonNode> trainNifty(
     System.out.println("========== ML TRAINING START ==========");
     System.out.println("Days = " + days);
 
-    Console console = System.console();
-    if (console != null) {
-        console.printf("Training NIFTY model for %d days...\n", days);
-    }
-
     // ----------------------------------------------------
     // Validate training period
     // ----------------------------------------------------
-    if (days < 5) {
-        throw new IllegalArgumentException(
-                "Training period must be at least 5 days."
-        );
-    }
-
-    if (horizonMinutes < 5 || horizonMinutes % 5 != 0) {
-        throw new IllegalArgumentException(
-                "horizonMinutes must be a multiple of 5 and at least 5."
-        );
-    }
+        validateTrainingRange(days, horizonMinutes);
 
     // ----------------------------------------------------
     // Training configuration
     // ----------------------------------------------------
     Timeframe timeframe = Timeframe.M5;
 
-    LocalDate to = LocalDate.now();
-    LocalDate from = to.minusDays(days);
+        LocalDate to = LocalDate.now(ZoneId.of("Asia/Kolkata")).minusDays(1);
+        LocalDate from = to.minusDays(days - 1L);
 
     int horizonCandles = horizonMinutes / 5;
 
@@ -153,19 +163,15 @@ public ResponseEntity<JsonNode> trainNifty(
                     + "..."
     );
 
-    List<Candle> candles =
-            market.history(
+    MarketDataService.TrainingHistory history =
+            market.fetchHistoricalTrainingData(
                     NIFTY,
                     timeframe,
                     from,
                     to
             );
+    List<Candle> candles = history.candles();
 
-    System.out.println(
-            "Fetched "
-                    + candles.size()
-                    + " candles."
-    );
 
     if (candles.isEmpty()) {
         throw new IllegalStateException(
@@ -176,9 +182,6 @@ public ResponseEntity<JsonNode> trainNifty(
     // ----------------------------------------------------
     // Generate canonical ML training dataset
     // ----------------------------------------------------
-    System.out.println(
-            "Generating ML training dataset..."
-    );
 
     List<TrainingExample> examples =
             datasets.generate(
@@ -187,17 +190,22 @@ public ResponseEntity<JsonNode> trainNifty(
                     threshold
             );
 
-    System.out.println(
-            "Generated "
-                    + examples.size()
-                    + " training examples."
-    );
 
     if (examples.isEmpty()) {
         throw new IllegalStateException(
                 "No usable training examples were generated."
         );
     }
+
+        Map<String, Object> datasetAudit = auditReport(
+                        from, to, history, examples, horizonCandles, horizonMinutes, threshold);
+        if ("DO_NOT_RETRAIN".equals(datasetAudit.get("retrainingRecommendation"))) {
+                ObjectNode blocked = objectMapper.createObjectNode();
+                blocked.put("status", "DATA_AUDIT_REQUIRED");
+                blocked.put("message", "Training is blocked until unavailable or constant features are resolved.");
+                blocked.set("datasetAudit", objectMapper.valueToTree(datasetAudit));
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(blocked);
+        }
 
     // ----------------------------------------------------
     // Convert Java training examples
@@ -287,6 +295,7 @@ System.out.println(
 
 response.set("direction", result);
 response.set("magnitude", magnitudeResult);
+response.set("datasetAudit", objectMapper.valueToTree(datasetAudit));
 
 //    return ResponseEntity.ok(
 //         objectMapper.createObjectNode()
@@ -296,10 +305,142 @@ response.set("magnitude", magnitudeResult);
 return ResponseEntity.ok(response);
 }
 
+        private Map<String, Object> auditReport(
+                        LocalDate from,
+                        LocalDate to,
+                        MarketDataService.TrainingHistory history,
+                        List<TrainingExample> examples,
+                        int horizonCandles,
+                        int horizonMinutes,
+                        BigDecimal threshold
+        ) {
+                Map<String, Object> report = new LinkedHashMap<>(datasetAudits.audit(
+                                from, to, history, examples, horizonCandles, horizonMinutes, threshold));
+                report.put("currentModels", currentModelDiagnostics());
+                return report;
+        }
+
+        private Map<String, Object> currentModelDiagnostics() {
+                Map<String, Object> result = new LinkedHashMap<>();
+                try {
+                        JsonNode direction = ml.modelStatus();
+                        result.put("direction", modelSummary(direction));
+                } catch (RuntimeException error) {
+                        result.put("direction", Map.of("status", "UNAVAILABLE", "message", String.valueOf(error.getMessage())));
+                }
+                try {
+                        JsonNode magnitude = ml.magnitudeModelStatus();
+                        result.put("magnitude", modelSummary(magnitude));
+                } catch (RuntimeException error) {
+                        result.put("magnitude", Map.of("status", "UNAVAILABLE", "message", String.valueOf(error.getMessage())));
+                }
+                return result;
+        }
+
+        private Map<String, Object> modelSummary(JsonNode model) {
+                Map<String, Object> summary = new LinkedHashMap<>();
+                summary.put("status", model.path("status").asText("UNKNOWN"));
+                summary.put("modelVersion", nullableText(model.path("modelVersion")));
+                summary.put("eligibleForAutomation", model.path("eligibleForAutomation").asBoolean(false));
+                summary.put("validationMetrics", objectMapper.convertValue(model.path("validationMetrics"), Object.class));
+                if (model.has("confusionMatrix")) {
+                        JsonNode matrix = model.path("confusionMatrix");
+                        List<String> labels = new ArrayList<>();
+                        for (JsonNode label : model.path("validationClassOrder")) {
+                                labels.add(label.asText());
+                        }
+                        if (labels.isEmpty()) labels = List.of("DOWN", "NEUTRAL", "UP");
+                        Map<String, Object> diagnostics = confusionMatrixMetrics(matrix, labels);
+                        summary.putAll(diagnostics);
+                }
+                if (model.has("perClassMetrics")) {
+                        summary.put("perClassMetrics", objectMapper.convertValue(model.path("perClassMetrics"), Object.class));
+                }
+                return summary;
+        }
+
+        private Map<String, Object> confusionMatrixMetrics(JsonNode matrix, List<String> labels) {
+                Map<String, Object> metrics = new LinkedHashMap<>();
+                int size = Math.min(matrix.size(), labels.size());
+                if (size == 0) return metrics;
+                double[][] values = new double[size][size];
+                double total = 0.0;
+                double trace = 0.0;
+                double[] rows = new double[size];
+                double[] columns = new double[size];
+                for (int row = 0; row < size; row++) {
+                        JsonNode rowValues = matrix.get(row);
+                        for (int column = 0; column < size && column < rowValues.size(); column++) {
+                                values[row][column] = rowValues.get(column).asDouble(0.0);
+                                rows[row] += values[row][column];
+                                columns[column] += values[row][column];
+                                total += values[row][column];
+                                if (row == column) trace += values[row][column];
+                        }
+                }
+                double recallSum = 0.0;
+                int supportedClasses = 0;
+                for (int index = 0; index < size; index++) {
+                        if (rows[index] > 0.0) {
+                                recallSum += values[index][index] / rows[index];
+                                supportedClasses++;
+                        }
+                }
+                metrics.put("balancedAccuracy", supportedClasses == 0 ? null : recallSum / supportedClasses);
+                double rowSquares = 0.0;
+                double columnSquares = 0.0;
+                for (int index = 0; index < size; index++) {
+                        rowSquares += rows[index] * rows[index];
+                        columnSquares += columns[index] * columns[index];
+                }
+                double mccDenominator = Math.sqrt((total * total - rowSquares) * (total * total - columnSquares));
+                metrics.put("matthewsCorrelationCoefficient", mccDenominator == 0.0
+                                ? null : (trace * total - dot(rows, columns)) / mccDenominator);
+
+                double meaningfulCount = 0.0;
+                double meaningfulCorrect = 0.0;
+                double meaningfulPredictedDirection = 0.0;
+                for (int actual = 0; actual < size; actual++) {
+                        if (!"UP".equals(labels.get(actual)) && !"DOWN".equals(labels.get(actual))) continue;
+                        meaningfulCount += rows[actual];
+                        meaningfulCorrect += values[actual][actual];
+                        for (int predicted = 0; predicted < size; predicted++) {
+                                if ("UP".equals(labels.get(predicted)) || "DOWN".equals(labels.get(predicted))) {
+                                        meaningfulPredictedDirection += values[actual][predicted];
+                                }
+                        }
+                }
+                metrics.put("meaningfulMoveSamples", (int) meaningfulCount);
+                metrics.put("meaningfulMoveDirectionalAccuracy", meaningfulCount == 0.0
+                                ? null : meaningfulCorrect / meaningfulCount);
+                metrics.put("meaningfulMoveDetectionRate", meaningfulCount == 0.0
+                                ? null : meaningfulPredictedDirection / meaningfulCount);
+                return metrics;
+        }
+
+        private double dot(double[] left, double[] right) {
+                double result = 0.0;
+                for (int index = 0; index < left.length; index++) result += left[index] * right[index];
+                return result;
+        }
+
+        private String nullableText(JsonNode value) {
+                return value == null || value.isMissingNode() || value.isNull() ? null : value.asText();
+        }
+
+        private void validateTrainingRange(int days, int horizonMinutes) {
+                if (days < 5) {
+                        throw new IllegalArgumentException("Training period must be at least 5 days.");
+                }
+                if (horizonMinutes < 5 || horizonMinutes % 5 != 0) {
+                        throw new IllegalArgumentException("horizonMinutes must be a multiple of 5 and at least 5.");
+                }
+        }
+
 
     private static MlPredictionService.TrainingRow trainingRow(TrainingExample example) {
         Map<String, Double> features = example.features().technicalStrategyFeatures().entrySet().stream()
-                .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().doubleValue()));
+                .collect(java.util.stream.Collectors.toMap(entry -> entry.getKey(), entry -> entry.getValue().doubleValue()));
         return new MlPredictionService.TrainingRow(example.timestamp().toString(), features, example.target().name());
     }
 
@@ -316,7 +457,7 @@ return ResponseEntity.ok(response);
                     .stream()
                     .collect(
                             java.util.stream.Collectors.toMap(
-                                    Map.Entry::getKey,
+                                    entry -> entry.getKey(),
                                     entry -> entry.getValue().doubleValue()
                             )
                     );

@@ -59,6 +59,12 @@ export function OptionOpportunityCard({
   }
 
   const option = opportunity.recommendedOption;
+  const expectedMove = opportunity.scenario?.expectedMovePoints
+    ?? opportunity.niftyContext?.expectedMovePoints
+    ?? null;
+  const direction = opportunity.scenario?.direction
+    ?? opportunity.niftyContext?.direction
+    ?? '—';
 
   return (
     <section className="panel">
@@ -70,35 +76,24 @@ export function OptionOpportunityCard({
 
         <span
           className={`pill ${
-            opportunity.recommendation === 'CE'
+            opportunity.status === 'DATA_INSUFFICIENT'
+              ? 'sell'
+              : opportunity.recommendation === 'CE'
               ? 'buy'
               : opportunity.recommendation === 'PE'
               ? 'sell'
               : ''
           }`}
         >
-          {opportunity.recommendation}
+            {opportunity.status === 'DATA_INSUFFICIENT' ? 'DATA INSUFFICIENT' : opportunity.recommendation}
         </span>
       </div>
 
       <div className="quote-grid">
-        <small>
-          NIFTY {opportunity.spot.toFixed(2)}
-        </small>
-
-        <small>
-          ATM {opportunity.atmStrike}
-        </small>
-
-        <small>
-          Expected move{' '}
-          {opportunity.niftyContext.expectedMovePoints.toFixed(2)} pts
-        </small>
-
-        <small>
-          Direction{' '}
-          {opportunity.niftyContext.direction}
-        </small>
+        <small>NIFTY {money(opportunity.spot)}</small>
+        <small>ATM {opportunity.atmStrike ?? '—'}</small>
+        <small>Expected move {expectedMove == null ? '—' : `${expectedMove.toFixed(2)} pts`}</small>
+        <small>Direction {direction}</small>
       </div>
 
       {option ? (
@@ -157,8 +152,9 @@ export function OptionOpportunityCard({
         </div>
       ) : (
         <div>
-          <strong>NO TRADE</strong>
+          <strong>{opportunity.status === 'DATA_INSUFFICIENT' ? 'NO TRADE · DATA INSUFFICIENT' : 'NO TRADE'}</strong>
           <p>{opportunity.decisionReason}</p>
+                <strong>{opportunity.status === 'DATA_INSUFFICIENT' ? 'NO TRADE · DATA INSUFFICIENT' : 'NO TRADE'}</strong>
         </div>
       )}
     </section>

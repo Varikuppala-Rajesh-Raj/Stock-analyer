@@ -39,7 +39,7 @@ public record MarketContext(
                 new java.util.LinkedHashMap<>();
 
         technicalFeatures.forEach(
-                (key, value) -> result.put("technical_" + key, value)
+                (key, value) -> result.put("intraday_momentum_" + key, value)
         );
 
         optionFeatures.forEach(
@@ -47,13 +47,24 @@ public record MarketContext(
         );
 
         globalFeatures.forEach(
-                (key, value) -> result.put("global_" + key, value)
+                (key, value) -> result.put(globalFeatureFamily(key) + "_" + key, value)
         );
 
         newsFeatures.forEach(
-                (key, value) -> result.put("news_" + key, value)
+                (key, value) -> result.put("news_context_" + key, value)
         );
 
         return Collections.unmodifiableMap(result);
+    }
+
+    private static String globalFeatureFamily(String key) {
+        String normalized = key == null ? "" : key.toLowerCase(java.util.Locale.ROOT);
+        if (normalized.contains("overnight")) {
+            return "overnight_return";
+        }
+        if (normalized.contains("opening") || normalized.contains("gap")) {
+            return "opening_gap";
+        }
+        return "macro_context";
     }
 }

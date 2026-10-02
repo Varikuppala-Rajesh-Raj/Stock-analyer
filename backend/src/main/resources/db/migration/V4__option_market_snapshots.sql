@@ -1,6 +1,6 @@
 CREATE TABLE option_market_snapshots (
   id BIGSERIAL PRIMARY KEY,
-  snapshot_timestamp TIMESTAMPTZ NOT NULL,
+  snapshot_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
   symbol VARCHAR(32) NOT NULL,
   expiry DATE NOT NULL,
   strike_price NUMERIC(20,6) NOT NULL,
@@ -11,7 +11,7 @@ CREATE TABLE option_market_snapshots (
   bid NUMERIC(20,6), ask NUMERIC(20,6), volume NUMERIC(24,4), oi NUMERIC(24,4),
   iv NUMERIC(20,8), delta NUMERIC(20,8), gamma NUMERIC(20,8), theta NUMERIC(20,8), vega NUMERIC(20,8),
   technical_features TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
   CONSTRAINT uq_option_snapshot_timestamp_contract UNIQUE(snapshot_timestamp, instrument_key)
 );
 CREATE INDEX idx_option_snapshots_symbol_time ON option_market_snapshots(symbol, snapshot_timestamp DESC);

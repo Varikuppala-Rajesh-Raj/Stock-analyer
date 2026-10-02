@@ -15,7 +15,8 @@ export function AppLayout() {
   };
 
   const navItems: NavItem[] = [
-    { path: '/', label: 'Overview', icon: '⌂' },
+    { path: '/nifty', label: 'NIFTY', icon: '⌂' },
+    { path: '/nifty-50', label: 'NIFTY 50', icon: '▦' },
     { path: '/markets', label: 'Markets', icon: '⌁' },
     { path: '/watchlist', label: 'Watchlist', icon: '☆' },
     { path: '/strategies', label: 'Strategies', icon: '◈' },

@@ -1,1 +1,1 @@
-package com.tradingplatform.paper; public enum PaperPositionStatus { OPEN, CLOSED }
+package com.tradingplatform.paper; public enum PaperPositionStatus { PENDING, OPEN, CLOSED, CANCELLED, REJECTED }

@@ -4,7 +4,6 @@ import com.tradingplatform.market.Candle;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Comparator;
 import java.util.List;
 
 /** Pure calculations for timestamped global-market features. */
@@ -29,7 +28,7 @@ public final class GlobalMarketFeatureCalculator {
 
         List<Candle> ordered = candles.stream()
                 .filter(candle -> candle != null && candle.timestamp() != null)
-                .sorted(Comparator.comparing(Candle::timestamp))
+            .sorted((left, right) -> left.timestamp().compareTo(right.timestamp()))
                 .toList();
         if (ordered.size() < 2) {
             return null;

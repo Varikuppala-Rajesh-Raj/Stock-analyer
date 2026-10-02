@@ -17,9 +17,11 @@ from pydantic import BaseModel, Field
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import (
     accuracy_score,
+    confusion_matrix,
     f1_score,
     mean_absolute_error,
     mean_squared_error,
+    precision_recall_fscore_support,
 )
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -206,6 +208,12 @@ class MagnitudeTrainingRequest(BaseModel):
         le=390,
     )
 
+    feature_schema_version: str
+
+    training_rows: list[MagnitudeTrainingRow] = Field(
+        min_length=1,
+    )
+
 
 class VolatilityTrainingRow(BaseModel):
     timestamp: datetime
@@ -289,16 +297,20 @@ class RegistryPromotionRequest(BaseModel):
 model = None
 
 metadata: dict = {
-    "status": "MODEL_NOT_TRAINED",
+    "status": "UNTRAINED",
     "modelVersion": None,
+    "eligibleForAutomation": False,
+    "validationStatus": "UNVALIDATED",
 }
 
 
 magnitude_model = None
 
 magnitude_metadata: dict = {
-    "status": "MODEL_NOT_TRAINED",
+    "status": "UNTRAINED",
     "modelVersion": None,
+    "eligibleForAutomation": False,
+    "validationStatus": "UNVALIDATED",
 }
 volatility_model = None
 volatility_metadata: dict = {
@@ -395,7 +407,11 @@ def load_persisted_option_magnitude_model() -> None:
     try:
         saved = joblib.load(OPTION_MAGNITUDE_MODEL_FILE)
         if saved.get("featureSchemaVersion") == OPTION_FEATURE_SCHEMA_VERSION:
-            option_magnitude_model = saved["model"]; option_magnitude_metadata = saved["metadata"]; option_magnitude_metadata["status"] = "READY"
+            option_magnitude_model = saved["model"]
+            option_magnitude_metadata = saved["metadata"]
+            option_magnitude_metadata["status"] = "READY"
+            option_magnitude_metadata.setdefault("eligibleForAutomation", False)
+            option_magnitude_metadata.setdefault("validationStatus", "UNVALIDATED")
     except Exception as error:
         option_magnitude_metadata = {"status": "ERROR", "modelVersion": None, "message": f"Unable to load option magnitude model: {error}"}
 
@@ -403,6 +419,25 @@ def load_persisted_option_magnitude_model() -> None:
 # ============================================================
 # LOAD PERSISTED DIRECTION MODEL
 # ============================================================
+
+
+def model_status_is_validated(status: str | None) -> bool:
+    return str(status or "").upper() == "VALIDATED"
+
+
+def model_is_eligible_for_prediction(model_metadata: dict | None) -> bool:
+    if not model_metadata:
+        return False
+    return model_status_is_validated(model_metadata.get("status"))
+
+
+def chronological_purged_split(row_count: int, horizon_minutes: int) -> tuple[int, int]:
+    split = int(row_count * 0.8)
+    purge_rows = max(1, math.ceil(horizon_minutes / 5))
+    train_end = split - purge_rows
+    if train_end <= 0 or split >= row_count:
+        raise HTTPException(status_code=422, detail="Chronological validation partition is invalid after purging forward labels.")
+    return train_end, split
 
 
 def load_persisted_model() -> None:
@@ -431,13 +466,15 @@ def load_persisted_model() -> None:
 
             metadata = saved["metadata"]
 
-            metadata["status"] = "READY"
+            metadata.setdefault("eligibleForAutomation", model_status_is_validated(metadata.get("status")))
 
     except Exception as error:
 
         metadata = {
             "status": "ERROR",
             "modelVersion": None,
+            "eligibleForAutomation": False,
+            "validationStatus": "UNVALIDATED",
             "message": (
                 "Unable to load persisted "
                 f"direction model: {error}"
@@ -478,15 +515,15 @@ def load_persisted_magnitude_model() -> None:
                 "metadata"
             ]
 
-            magnitude_metadata[
-                "status"
-            ] = "READY"
+            magnitude_metadata.setdefault("eligibleForAutomation", model_status_is_validated(magnitude_metadata.get("status")))
 
     except Exception as error:
 
         magnitude_metadata = {
             "status": "ERROR",
             "modelVersion": None,
+            "eligibleForAutomation": False,
+            "validationStatus": "UNVALIDATED",
             "message": (
                 "Unable to load persisted "
                 f"magnitude model: {error}"
@@ -531,19 +568,162 @@ def load_persisted_opening_model() -> None:
 
 
 # ============================================================
-# STARTUP
+# BASELINE TRAINING BOOTSTRAP
 # ============================================================
+
+
+def build_baseline_training_rows(samples: int = 220) -> list[dict]:
+    rows: list[dict] = []
+    for index in range(samples):
+        trend = math.sin(index / 18.0)
+        momentum = (index % 17) / 15.0
+        signal = math.sin(index / 7.0) + 0.55 * math.sin(index / 19.0)
+        feature_values = {
+            "ema9": 100.0 + index * 0.06 + trend * 2.5,
+            "ema20": 100.0 + index * 0.08 + trend * 2.0,
+            "ema50": 99.5 + index * 0.10 + trend * 1.5,
+            "ema_slope_percent": (signal * 0.65) + (momentum * 0.12),
+            "price_to_ema20_percent": (signal * 0.38) + (momentum * 0.08),
+            "price_to_ema50_percent": (signal * 0.32) + (momentum * 0.07),
+            "rsi14": 50.0 + signal * 25.0 + momentum * 10.0,
+            "macd": signal * 2.5 + momentum,
+            "macd_signal": signal * 1.8 + momentum * 0.7,
+            "macd_histogram": signal * 1.1 + momentum * 0.5,
+            "roc10_percent": signal * 0.9 + momentum * 0.3,
+            "atr": 8.0 + momentum * 6.0 + abs(signal) * 4.0,
+            "atr_percent": 0.12 + abs(signal) * 0.3 + momentum * 0.08,
+            "bollinger_width_percent": 0.6 + abs(signal) * 0.7 + momentum * 0.2,
+            "recent_high": 101.0 + index * 0.05 + abs(signal) * 3.0,
+            "recent_low": 98.0 + index * 0.04 - abs(signal) * 2.5,
+            "breakout_strength": signal * 0.8 + momentum * 0.4,
+            "relative_volume": 0.9 + momentum * 0.7,
+            "vwap_distance_percent": signal * 0.9 + momentum * 0.25,
+            "ema20_distance_percent": signal * 0.6 + momentum * 0.15,
+            "upper_band_distance_percent": signal * 0.4 + momentum * 0.2,
+            "current_volume": 1400000.0 + (index % 25) * 50000.0 + abs(signal) * 80000.0,
+            "average_volume20": 1300000.0 + (index % 18) * 40000.0,
+            "regime_score": 0.5 + signal * 0.35,
+            "market_regime_encoded": 1.0 if signal >= 0 else 0.0,
+            "context_available": 1.0,
+            "market_context_score": 0.5 + signal * 0.35,
+            "overall_technical_score": 52.0 + signal * 22.0 + momentum * 8.0,
+        }
+
+        future_return = 0.21 * signal + 0.04 * momentum
+        if future_return > 0.12:
+            target = "UP"
+        elif future_return < -0.12:
+            target = "DOWN"
+        else:
+            target = "NEUTRAL"
+
+        rows.append(
+            {
+                "timestamp": datetime(2024, 1, 1, tzinfo=timezone.utc) + __import__("datetime").timedelta(minutes=index * 5),
+                "features": feature_values,
+                "target": target,
+                "future_return_percent": future_return,
+            }
+        )
+
+    return rows
+
+
+def ensure_baseline_models() -> dict:
+    global model, metadata, magnitude_model, magnitude_metadata
+
+    if model is not None and metadata.get("status") in {"VALIDATED", "READY", "SYNTHETIC_BASELINE"}:
+        return metadata
+
+    if magnitude_model is not None and magnitude_metadata.get("status") in {"VALIDATED", "READY", "SYNTHETIC_BASELINE"}:
+        return magnitude_metadata
+
+    if DIRECTION_MODEL_FILE.exists() and MAGNITUDE_MODEL_FILE.exists():
+        load_persisted_model()
+        load_persisted_magnitude_model()
+        if model is not None and metadata.get("status") in {"VALIDATED", "READY", "SYNTHETIC_BASELINE"}:
+            return metadata
+        return magnitude_metadata
+
+    rows = build_baseline_training_rows()
+    direction_rows = [
+        {"timestamp": row["timestamp"], "features": row["features"], "target": row["target"]}
+        for row in rows
+    ]
+    magnitude_rows = [
+        {"timestamp": row["timestamp"], "features": row["features"], "target_return_percent": row["future_return_percent"]}
+        for row in rows
+    ]
+
+    direction_payload = {
+        "symbol": "NIFTY",
+        "horizon_minutes": 15,
+        "movement_threshold_percent": 0.2,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "training_rows": [
+            {
+                "timestamp": row["timestamp"].isoformat(),
+                "features": row["features"],
+                "target": row["target"],
+            }
+            for row in direction_rows
+        ],
+    }
+    magnitude_payload = {
+        "symbol": "NIFTY",
+        "horizon_minutes": 15,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "training_rows": [
+            {
+                "timestamp": row["timestamp"].isoformat(),
+                "features": row["features"],
+                "target_return_percent": row["target_return_percent"],
+            }
+            for row in magnitude_rows
+        ],
+    }
+
+    DIRECTION_MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    direction_training = train(
+        TrainingRequest(**direction_payload)
+    )
+    magnitude_training = train_magnitude(
+        MagnitudeTrainingRequest(**magnitude_payload)
+    )
+
+    direction_training["status"] = "SYNTHETIC_BASELINE"
+    direction_training["validationStatus"] = "UNVALIDATED"
+    direction_training["eligibleForAutomation"] = False
+    direction_training["validationMetrics"] = {
+        **direction_training.get("validationMetrics", {}),
+        "syntheticBaseline": True,
+    }
+
+    magnitude_training["status"] = "SYNTHETIC_BASELINE"
+    magnitude_training["validationStatus"] = "UNVALIDATED"
+    magnitude_training["eligibleForAutomation"] = False
+    magnitude_training["validationMetrics"] = {
+        **magnitude_training.get("validationMetrics", {}),
+        "syntheticBaseline": True,
+    }
+
+    metadata = direction_training
+    magnitude_metadata = magnitude_training
+    return metadata
 
 
 @app.on_event("startup")
 def startup() -> None:
 
     load_persisted_model()
-
     load_persisted_magnitude_model()
     load_persisted_option_magnitude_model()
     load_persisted_volatility_model()
     load_persisted_opening_model()
+
+    if metadata.get("status") not in {"VALIDATED", "SYNTHETIC_BASELINE"} or magnitude_metadata.get("status") not in {"VALIDATED", "SYNTHETIC_BASELINE"}:
+        ensure_baseline_models()
 
 
 # ============================================================
@@ -848,6 +1028,14 @@ def train_option_magnitude(
             else None
         )
 
+        zero_return_baseline_mae = float(np.mean(np.abs(y_validation)))
+        zero_return_baseline_rmse = float(np.sqrt(np.mean(np.square(y_validation))))
+        validation_status = (
+            "VALIDATED"
+            if mae < zero_return_baseline_mae and rmse < zero_return_baseline_rmse
+            else "UNVALIDATED"
+        )
+
         # ====================================================
         # 9. MODEL VERSION
         # ====================================================
@@ -921,6 +1109,10 @@ def train_option_magnitude(
             "validationMethod":
                 "chronological timestamp 80/20 holdout",
 
+            "validationStatus": validation_status,
+
+            "eligibleForAutomation": validation_status == "VALIDATED",
+
             "target":
                 "future_option_return_percent",
 
@@ -937,6 +1129,12 @@ def train_option_magnitude(
                         float(rmse),
                         6
                     ),
+
+                "zeroReturnBaselineMaePercent":
+                    round(zero_return_baseline_mae, 6),
+
+                "zeroReturnBaselineRmsePercent":
+                    round(zero_return_baseline_rmse, 6),
 
                 "r2":
                     None
@@ -1196,15 +1394,13 @@ def train(
     # Chronological 80 / 20 split
     # --------------------------------------------------------
 
-    split = int(
-        len(rows) * 0.80
-    )
+    train_end, split = chronological_purged_split(len(rows), request.horizon_minutes)
 
-    x_train = X[:split]
+    x_train = X[:train_end]
 
     x_validation = X[split:]
 
-    y_train = y[:split]
+    y_train = y[:train_end]
 
     y_validation = y[split:]
 
@@ -1266,6 +1462,23 @@ def train(
             in LABELS.items()
         }
 
+        def split_distribution(values):
+            total = len(values)
+            return {
+                name: {
+                    "count": int(np.sum(values == label)),
+                    "percentage": round(float(np.mean(values == label) * 100), 4) if total else 0.0,
+                }
+                for name, label in LABELS.items()
+            }
+
+        precision, recall, class_f1, support = precision_recall_fscore_support(
+            y_validation,
+            predicted,
+            labels=[LABELS["DOWN"], LABELS["NEUTRAL"], LABELS["UP"]],
+            zero_division=0,
+        )
+
         # ----------------------------------------------------
         # Model version
         # ----------------------------------------------------
@@ -1283,9 +1496,14 @@ def train(
         # Metadata
         # ----------------------------------------------------
 
+        validation_accuracy = float(accuracy_score(y_validation, predicted))
+        validation_f1 = float(f1_score(y_validation, predicted, average="macro", zero_division=0))
+        majority_baseline_accuracy = float(np.mean(y_validation == np.bincount(y_validation).argmax()))
+        status = "VALIDATED" if validation_accuracy >= 0.52 and validation_f1 >= 0.35 and validation_accuracy > majority_baseline_accuracy else "TRAINED_UNVALIDATED"
+
         metadata = {
 
-            "status": "READY",
+            "status": status,
 
             "modelVersion": version,
 
@@ -1318,40 +1536,75 @@ def train(
             "trainingRows":
                 len(x_train),
 
+            "trainingStartTimestamp":
+                rows[0].timestamp.isoformat(),
+
+            "purgedRows":
+                split - train_end,
+
             "validationRows":
                 len(x_validation),
+
+            "trainingEndTimestamp":
+                rows[train_end - 1].timestamp.isoformat(),
+
+            "validationStartTimestamp":
+                rows[split].timestamp.isoformat(),
+
+            "validationEndTimestamp":
+                rows[-1].timestamp.isoformat(),
 
             "classDistribution":
                 distribution,
 
+            "classDistributionBySplit": {
+                "training": split_distribution(y_train),
+                "purged": split_distribution(y[train_end:split]),
+                "holdout": split_distribution(y_validation),
+            },
+
+            "validationClassOrder": ["DOWN", "NEUTRAL", "UP"],
+
+            "confusionMatrix": confusion_matrix(
+                y_validation,
+                predicted,
+                labels=[LABELS["DOWN"], LABELS["NEUTRAL"], LABELS["UP"]],
+            ).tolist(),
+
+            "perClassMetrics": {
+                name: {
+                    "precision": round(float(precision[index]), 4),
+                    "recall": round(float(recall[index]), 4),
+                    "f1": round(float(class_f1[index]), 4),
+                    "support": int(support[index]),
+                }
+                for index, name in enumerate(["DOWN", "NEUTRAL", "UP"])
+            },
+
             "validationMethod":
-                "chronological 80/20 holdout",
+                "chronological 80/20 holdout with forward-label purge",
+
+            "validationStatus":
+                "VALIDATED" if status == "VALIDATED" else "UNVALIDATED",
+
+            "eligibleForAutomation": status == "VALIDATED",
 
             "validationMetrics": {
 
                 "accuracy":
                     round(
-                        float(
-                            accuracy_score(
-                                y_validation,
-                                predicted,
-                            )
-                        ),
+                        validation_accuracy,
                         4,
                     ),
 
                 "f1Macro":
                     round(
-                        float(
-                            f1_score(
-                                y_validation,
-                                predicted,
-                                average="macro",
-                                zero_division=0,
-                            )
-                        ),
+                        validation_f1,
                         4,
                     ),
+
+                "majorityClassAccuracy":
+                    round(majority_baseline_accuracy, 4),
             },
         }
 
@@ -1912,15 +2165,13 @@ def train_magnitude(
     # Chronological 80 / 20 split
     # --------------------------------------------------------
 
-    split = int(
-        len(rows) * 0.80
-    )
+    train_end, split = chronological_purged_split(len(rows), request.horizon_minutes)
 
-    x_train = X[:split]
+    x_train = X[:train_end]
 
     x_validation = X[split:]
 
-    y_train = y[:split]
+    y_train = y[:train_end]
 
     y_validation = y[split:]
 
@@ -1986,6 +2237,8 @@ def train_magnitude(
                 predicted,
             )
         )
+        zero_return_baseline_mae = float(np.mean(np.abs(y_validation)))
+        zero_return_baseline_rmse = float(np.sqrt(np.mean(np.square(y_validation))))
 
         # ----------------------------------------------------
         # Model version
@@ -2004,9 +2257,11 @@ def train_magnitude(
         # Metadata
         # ----------------------------------------------------
 
+        status = "VALIDATED" if mae <= 0.55 and rmse <= 1.0 and mae < zero_return_baseline_mae and rmse < zero_return_baseline_rmse else "TRAINED_UNVALIDATED"
+
         magnitude_metadata = {
 
-            "status": "READY",
+            "status": status,
 
             "modelVersion": version,
 
@@ -2036,14 +2291,28 @@ def train_magnitude(
             "trainingRows":
                 len(x_train),
 
+            "purgedRows":
+                split - train_end,
+
             "validationRows":
                 len(x_validation),
 
+            "trainingEndTimestamp":
+                rows[train_end - 1].timestamp.isoformat(),
+
+            "validationStartTimestamp":
+                rows[split].timestamp.isoformat(),
+
             "validationMethod":
-                "chronological 80/20 holdout",
+                "chronological 80/20 holdout with forward-label purge",
 
             "target":
                 "future_return_percent",
+
+            "validationStatus":
+                "VALIDATED" if status == "VALIDATED" else "UNVALIDATED",
+
+            "eligibleForAutomation": status == "VALIDATED",
 
             "validationMetrics": {
 
@@ -2058,6 +2327,12 @@ def train_magnitude(
                         float(rmse),
                         6,
                     ),
+
+                "zeroReturnBaselineMaePercent":
+                    round(zero_return_baseline_mae, 6),
+
+                "zeroReturnBaselineRmsePercent":
+                    round(zero_return_baseline_rmse, 6),
             },
         }
 
@@ -2188,14 +2463,13 @@ def predict(
 ) -> dict:
 
     if (
-        metadata.get("status")
-        != "READY"
+        not model_is_eligible_for_prediction(metadata)
         or model is None
     ):
 
         raise HTTPException(
             status_code=409,
-            detail="MODEL_NOT_TRAINED",
+            detail="MODEL_NOT_VALIDATED",
         )
 
     if request.horizon_minutes != metadata.get("horizonMinutes"):
@@ -2289,17 +2563,14 @@ def predict_magnitude(
 ) -> dict:
 
     if (
-        magnitude_metadata.get(
-            "status"
-        )
-        != "READY"
+        not model_is_eligible_for_prediction(magnitude_metadata)
         or magnitude_model is None
     ):
 
         raise HTTPException(
             status_code=409,
             detail=(
-                "MAGNITUDE_MODEL_NOT_TRAINED"
+                "MAGNITUDE_MODEL_NOT_VALIDATED"
             ),
         )
 

@@ -11,6 +11,7 @@ config/credentials.yml
 # IDE & Editor
 # ========================================
 .vscode/
+.claude/
 .idea/
 *.swp
 *.swo

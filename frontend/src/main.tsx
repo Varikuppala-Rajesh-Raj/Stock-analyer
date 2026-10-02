@@ -7,7 +7,7 @@ import './styles.css';
 import { AppLayout } from './components/layout/AppLayout';
 
 // Pages
-import { Overview } from './pages/Overview';
+import { NiftyPage } from './pages/Overview';
 import { Markets } from './pages/Markets';
 import { Watchlist } from './pages/Watchlist';
 import { InstrumentDetail } from './pages/InstrumentDetail';
@@ -18,13 +18,17 @@ import { LiveFeed } from './pages/LiveFeed';
 import { Alerts } from './pages/Alerts';
 import { Journal } from './pages/Journal';
 import { NiftyOptions } from './pages/NiftyOptions';
+import { Nifty50 } from './pages/Nifty50';
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route element={<AppLayout />}>
-          <Route path="/" element={<Overview />} />
+          <Route path="/" element={<Navigate to="/nifty" replace />} />
+          <Route path="/nifty" element={<NiftyPage />} />
+          <Route path="/overview" element={<Navigate to="/nifty" replace />} />
+          <Route path="/nifty-50" element={<Nifty50 />} />
           <Route path="/markets" element={<Markets />} />
           <Route path="/watchlist" element={<Watchlist />} />
           <Route path="/instruments/:symbol" element={<InstrumentDetail />} />

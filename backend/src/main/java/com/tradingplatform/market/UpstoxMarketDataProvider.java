@@ -39,8 +39,8 @@ public class UpstoxMarketDataProvider implements MarketDataProvider {
 
     public UpstoxMarketDataProvider(
             ObjectMapper json,
-            @Value("${trading.upstox.UPSTOX_BASE_URL}") String baseUrl,
-            @Value("${trading.upstox.UPSTOX_ACCESS_TOKEN}") String token
+            @Value("${trading.upstox.UPSTOX_BASE_URL:http://localhost}") String baseUrl,
+            @Value("${trading.upstox.UPSTOX_ACCESS_TOKEN:dummy-token}") String token
     ) {
         this.json = json;
         this.baseUrl = baseUrl;
@@ -188,12 +188,6 @@ public class UpstoxMarketDataProvider implements MarketDataProvider {
 
         try {
 
-            System.out.println();
-            System.out.println("========== UPSTOX REST REQUEST ==========");
-            System.out.println("URL           : " + url);
-            System.out.println("Token present : " + !token.isBlank());
-            System.out.println("Token length  : " + token.length());
-            System.out.println("=========================================");
 
             HttpRequest request =
                     HttpRequest.newBuilder(
@@ -217,19 +211,7 @@ public class UpstoxMarketDataProvider implements MarketDataProvider {
                             HttpResponse.BodyHandlers.ofString()
                     );
 
-            System.out.println();
-            System.out.println("========== UPSTOX REST RESPONSE ==========");
-            System.out.println(
-                    "HTTP STATUS : " +
-                    response.statusCode()
-            );
-            System.out.println(
-                    "BODY        : " +
-                    response.body()
-            );
-            System.out.println("==========================================");
-
-            /*
+                  /*
              * Authentication failure
              */
             if (response.statusCode() == 401) {

@@ -3,10 +3,13 @@ package com.tradingplatform.market.ml;
 import com.tradingplatform.market.Candle;
 import com.tradingplatform.market.indicators.FeatureVector;
 import com.tradingplatform.market.indicators.TechnicalFeatureService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -40,12 +43,20 @@ public class TrainingDatasetService {
     private static final int MIN_CANDLES = 60;
 
     private final TechnicalFeatureService featureService;
+        private final int featureWindowCandles;
 
+        @Autowired
     public TrainingDatasetService(
-            TechnicalFeatureService featureService) {
+                        TechnicalFeatureService featureService,
+                        @Value("${trading.analysis.intraday-window-candles:500}") int featureWindowCandles) {
 
         this.featureService =
                 featureService;
+                this.featureWindowCandles = Math.max(MIN_CANDLES, featureWindowCandles);
+        }
+
+        public TrainingDatasetService(TechnicalFeatureService featureService) {
+                this(featureService, 500);
     }
 
     /**
@@ -113,13 +124,8 @@ public class TrainingDatasetService {
              */
             List<Candle> historicalWindow =
                     ordered.subList(
-                            0,
+                            Math.max(0, i + 1 - featureWindowCandles),
                             i + 1
-                    );
-
-            FeatureVector features =
-                    featureService.calculate(
-                            historicalWindow
                     );
 
             Candle current =
@@ -128,6 +134,16 @@ public class TrainingDatasetService {
             Candle future =
                     ordered.get(
                             i + horizonCandles
+                    );
+
+            if (!Duration.between(current.timestamp(), future.timestamp())
+                    .equals(Duration.ofMinutes(5L * horizonCandles))) {
+                continue;
+            }
+
+            FeatureVector features =
+                    featureService.calculate(
+                            historicalWindow
                     );
 
             BigDecimal currentClose =

@@ -32,7 +32,7 @@ public class NiftyOptionChainService {
             OptionMarketSnapshotRepository snapshots,
             @Value("${trading.upstox.base-url:https://api.upstox.com}")
             String baseUrl,
-            @Value("${upstox.access-token}")
+            @Value("${upstox.access-token:}")
             String accessToken
     ) {
 

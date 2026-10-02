@@ -6,6 +6,8 @@ import {
   ColorType,
   type IChartApi,
   type ISeriesApi,
+  TickMarkType,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
 
@@ -24,6 +26,41 @@ type Props = {
   candles: Candle[];
   height?: number;
 };
+
+const indiaTimeFormatter = new Intl.DateTimeFormat('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+const indiaDateTimeFormatter = new Intl.DateTimeFormat('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  dateStyle: 'medium',
+  timeStyle: 'short',
+});
+
+const indiaDateFormatter = new Intl.DateTimeFormat('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  day: '2-digit',
+  month: 'short',
+});
+
+const indiaMonthFormatter = new Intl.DateTimeFormat('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  month: 'short',
+});
+
+const indiaYearFormatter = new Intl.DateTimeFormat('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  year: 'numeric',
+});
+
+function chartTimeToDate(time: Time): Date {
+  if (typeof time === 'number') return new Date(time * 1000);
+  if (typeof time === 'string') return new Date(time);
+  return new Date(Date.UTC(time.year, time.month - 1, time.day));
+}
 
 function normalizeCandle(candle: Candle) {
   if (Array.isArray(candle)) {
@@ -103,11 +140,20 @@ export function PriceChart({
         borderColor: '#374151',
         timeVisible: true,
         secondsVisible: false,
+        tickMarkFormatter: (time: Time, tickType: TickMarkType) => {
+          const date = chartTimeToDate(time);
+          if (tickType === TickMarkType.Year) return indiaYearFormatter.format(date);
+          if (tickType === TickMarkType.Month) return indiaMonthFormatter.format(date);
+          if (tickType === TickMarkType.DayOfMonth) return indiaDateFormatter.format(date);
+          return indiaTimeFormatter.format(date);
+        },
       },
 
       localization: {
         priceFormatter: (price: number) =>
           price.toFixed(2),
+        timeFormatter: (time: Time) =>
+          indiaDateTimeFormatter.format(chartTimeToDate(time)),
       },
     });
 

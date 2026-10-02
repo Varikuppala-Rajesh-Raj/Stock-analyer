@@ -1,12 +1,13 @@
 import { useScanner } from '../services/hooks';
 import { useNavigate } from 'react-router-dom';
+import type { ScannerResult } from '../services/api';
 
 const n = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
-const money = (v: number) => `₹${n.format(v)}`;
+const money = (v: number | null) => v == null ? '—' : `₹${n.format(v)}`;
 
 export function Strategies() {
   const navigate = useNavigate();
-  const { signals, loading, error } = useScanner('15m', 30000);
+  const { signals, loading, error, refetch } = useScanner('15m', 30000);
 
   return (
     <main>
@@ -16,7 +17,7 @@ export function Strategies() {
           <h1>Strategy scanner</h1>
           <p>Rank instruments by technical confirmation, quality, and risk/reward.</p>
         </div>
-        <button className="primary">↻ Refresh scan</button>
+        <button className="primary" onClick={() => void refetch()}>↻ Refresh scan</button>
       </div>
 
       <div className="filters">
@@ -43,24 +44,24 @@ export function Strategies() {
             <span>Thesis</span>
             <span>Action</span>
           </div>
-          {signals.map((signal: any) => (
+          {signals.map((signal: ScannerResult) => (
             <div className="strategy" key={signal.symbol}>
               <div>
                 <b>{signal.symbol}</b>
-                <small>{signal.name || signal.symbol} • NSE</small>
+                <small>{signal.symbol} • NSE</small>
               </div>
-              <span className={`pill ${signal.side.toLowerCase()}`}>{signal.side}</span>
+              <span className={`pill ${signal.signal.toLowerCase()}`}>{signal.signal}</span>
               <div className="score">
-                <b>{signal.score}</b>
-                <span><i style={{ width: `${signal.score}%` }} /></span>
+                <b>{signal.signalStrength}</b>
+                <span><i style={{ width: `${signal.signalStrength}%` }} /></span>
               </div>
               <b>{money(signal.price)}</b>
               <div>
-                <b>{money(signal.price)}</b>
+                <b>{money(signal.entry)}</b>
                 <small className="bad">SL {money(signal.stopLoss)}</small>
                 <small className="good">T {money(signal.target)}</small>
               </div>
-              <p>{signal.thesis}</p>
+              <p>{signal.reasons?.length ? signal.reasons.join(' · ') : 'No thesis details available.'}</p>
               <button 
                 className="outline" 
                 onClick={() => navigate(`/instruments/${signal.symbol}`)}

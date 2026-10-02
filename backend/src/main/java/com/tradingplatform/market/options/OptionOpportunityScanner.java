@@ -2,6 +2,7 @@ package com.tradingplatform.market.options;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.tradingplatform.market.ml.MlPredictionService;
+import com.tradingplatform.market.scenario.MarketScenario;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -56,6 +57,18 @@ public class OptionOpportunityScanner {
             JsonNode direction,
             double niftyReturn,
             boolean optionReturnModelReady
+    ) {
+        return scan(chain, expiry, tech, direction, niftyReturn, optionReturnModelReady, null);
+    }
+
+    public Map<String, Object> scan(
+            JsonNode chain,
+            String expiry,
+            Map<String, Double> tech,
+            JsonNode direction,
+            double niftyReturn,
+            boolean optionReturnModelReady,
+            MarketScenario marketScenario
     ) {
 
         if (chain == null || !chain.isArray() || chain.isEmpty()) {
@@ -145,6 +158,9 @@ public class OptionOpportunityScanner {
         out.put("symbol", "NIFTY");
         out.put("spot", r(spot));
         out.put("atmStrike", r(atm));
+        if (marketScenario != null) {
+            out.put("marketScenario", marketScenario.toMap());
+        }
 
         out.put(
                 "recommendation",

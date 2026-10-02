@@ -12,13 +12,14 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 
 /** Marketaux implementation of the platform's single news-provider boundary. */
 @Component
-@ConditionalOnProperty(name = "trading.news.provider", havingValue = "marketaux", matchIfMissing = true)
+@ConditionalOnExpression("'${trading.news.provider:marketaux}' == 'marketaux' and '${trading.news.marketaux.api-key:}' != ''")
 public class MarketauxNewsProvider implements NewsProvider {
     private static final String NEWS_PATH = "/v1/news/all";
 
@@ -30,8 +31,9 @@ public class MarketauxNewsProvider implements NewsProvider {
     private final String language;
     private final int limit;
 
+    @Autowired
     public MarketauxNewsProvider(ObjectMapper objectMapper,
-                                 @Value("${trading.news.marketaux.base-url}") String baseUrl,
+                                 @Value("${trading.news.marketaux.base-url:https://api.marketaux.com}") String baseUrl,
                                  @Value("${trading.news.marketaux.api-key:}") String apiKey,
                                  @Value("${trading.news.marketaux.country:in}") String country,
                                  @Value("${trading.news.marketaux.language:en}") String language,
@@ -134,9 +136,16 @@ public class MarketauxNewsProvider implements NewsProvider {
     }
 
     private static Double averageFinite(List<JsonNode> entities, String field) {
-        double[] scores = entities.stream().map(entity -> finiteNumber(entity.get(field))).filter(value -> value != null)
-                .mapToDouble(Double::doubleValue).toArray();
-        return scores.length == 0 ? null : java.util.Arrays.stream(scores).average().orElseThrow();
+        double total = 0.0;
+        int count = 0;
+        for (JsonNode entity : entities) {
+            Double score = finiteNumber(entity.get(field));
+            if (score != null) {
+                total += score.doubleValue();
+                count++;
+            }
+        }
+        return count == 0 ? null : total / count;
     }
 
     private static Double finiteNumber(JsonNode node) {

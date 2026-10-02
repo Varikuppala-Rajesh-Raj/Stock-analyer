@@ -13,17 +13,38 @@ import org.springframework.stereotype.Service;
 public class MarketDataService {
  private static final int ANALYSIS_MINIMUM_CANDLES = 60;
  private final InstrumentCatalogService catalog; private final MarketDataProvider provider; private final MarketDataCache cache; private final CandlePersistenceService persistence;
+ private final boolean realHistoricalProviderSelected;
  private final int analysisHistoryDays; private final int analysisWindowCandles; private final java.time.Duration quoteMaxAge;
  public MarketDataService(InstrumentCatalogService catalog, UpstoxMarketDataProvider upstox, MockMarketDataProvider mock,
                           MarketDataCache cache, CandlePersistenceService persistence,
-                          @Value("${trading.MARKET_DATA_PROVIDER}") String selected,
+                          @Value("${trading.MARKET_DATA_PROVIDER:mock}") String selected,
                           @Value("${trading.analysis.intraday-history-days:10}") int analysisHistoryDays,
                           @Value("${trading.analysis.intraday-window-candles:500}") int analysisWindowCandles,
                           @Value("${trading.market-data.quote-max-age-seconds:300}") long quoteMaxAgeSeconds) {
-  this.catalog=catalog; this.provider="upstox".equalsIgnoreCase(selected) ? upstox : mock; this.cache=cache; this.persistence=persistence;
+  this.catalog=catalog; this.realHistoricalProviderSelected="upstox".equalsIgnoreCase(selected); this.provider=realHistoricalProviderSelected ? upstox : mock; this.cache=cache; this.persistence=persistence;
   this.analysisHistoryDays=analysisHistoryDays; this.analysisWindowCandles=analysisWindowCandles; this.quoteMaxAge=java.time.Duration.ofSeconds(quoteMaxAgeSeconds);
  }
  public Instrument instrument(String symbol) { return catalog.resolveSymbol(symbol); }
+ public List<Candle> fetchHistoricalForTraining(String symbol, Timeframe timeframe, LocalDate from, LocalDate to) {
+  return fetchHistoricalTrainingData(symbol,timeframe,from,to).candles();
+ }
+ public TrainingHistory fetchHistoricalTrainingData(String symbol, Timeframe timeframe, LocalDate from, LocalDate to) {
+  if (!realHistoricalProviderSelected) throw new MarketDataUnavailableException("Real historical training requires MARKET_DATA_PROVIDER=upstox.");
+  Instrument instrument=instrument(symbol);
+  List<Candle> fetched=new ArrayList<>();
+  LocalDate chunkFrom=from;
+  while (!chunkFrom.isAfter(to)) {
+   LocalDate chunkTo=chunkFrom.plusDays(29);
+   if (chunkTo.isAfter(to)) chunkTo=to;
+   fetched.addAll(provider.getHistoricalCandles(instrument.instrumentKey(),timeframe,chunkFrom,chunkTo));
+   chunkFrom=chunkTo.plusDays(1);
+  }
+  List<Candle> values=normalise(fetched);
+  if (values.isEmpty()) throw new MarketDataUnavailableException("Upstox returned no historical candles for training.");
+  persistence.upsert(instrument.instrumentKey(),timeframe,values);
+  return new TrainingHistory(values,fetched.size(),fetched.size()-values.size());
+ }
+ public record TrainingHistory(List<Candle> candles,int fetchedRows,int duplicateRows) {}
  public Quote quote(String symbol) { Instrument i=instrument(symbol); return cache.getQuote(i.instrumentKey()).orElseGet(()->{Quote q=provider.getQuote(i); if (MarketDataNormalizer.isQuoteStale(q, quoteMaxAge)) throw new MarketDataUnavailableException("Quote for "+symbol+" is stale; data age exceeds configured maximum of "+quoteMaxAge.getSeconds()+" seconds."); cache.putQuote(i.instrumentKey(),q);return q;}); }
  public List<Candle> history(String symbol, Timeframe timeframe, LocalDate from, LocalDate to) { Instrument i=instrument(symbol);String range=from+":"+to;return cache.getCandles(i.instrumentKey(),timeframe,range).orElseGet(()->{List<Candle> persisted=normalise(persistence.find(i.instrumentKey(),timeframe,from,to));int required=timeframe==Timeframe.M5?100:1;if(persisted.size()>=required){cache.putCandles(i.instrumentKey(),timeframe,range,persisted);return persisted;}List<Candle> c=normalise(provider.getHistoricalCandles(i.instrumentKey(),timeframe,from,to));if(c.isEmpty())throw new MarketDataUnavailableException("No historical "+timeframe+" candles are available for "+symbol);persistence.upsert(i.instrumentKey(),timeframe,c);cache.putCandles(i.instrumentKey(),timeframe,range,c);return c;}); }
 

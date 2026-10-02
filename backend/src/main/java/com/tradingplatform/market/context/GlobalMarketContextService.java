@@ -12,7 +12,6 @@ import com.tradingplatform.market.MockMarketDataProvider;
 import com.tradingplatform.market.UpstoxMarketDataProvider;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -39,7 +38,7 @@ public class GlobalMarketContextService {
             InstrumentCatalogService catalog,
             UpstoxMarketDataProvider upstox,
             MockMarketDataProvider mock,
-            @Value("${trading.MARKET_DATA_PROVIDER}") String selected,
+            @Value("${trading.MARKET_DATA_PROVIDER:mock}") String selected,
             @Value("${trading.global.quote-max-age-seconds:900}") long quoteMaxAgeSeconds,
             @Value("${trading.global.instruments.gift-nifty:}") String giftNifty,
             @Value("${trading.global.instruments.sp500:}") String sp500,

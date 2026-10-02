@@ -1,7 +1,7 @@
 package com.tradingplatform.market.context;
 
-import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /** Deterministically flattens a point-in-time MarketContext for ML consumers. */
@@ -31,6 +31,33 @@ public final class FeatureEngine {
                 .filter(entry -> entry.getKey() != null && entry.getValue() != null)
                 .filter(entry -> Double.isFinite(entry.getValue()))
                 .sorted(Map.Entry.comparingByKey())
-                .forEach(entry -> target.put(prefix + "_" + entry.getKey(), entry.getValue()));
+                .forEach(entry -> target.put(buildFeatureName(prefix, entry.getKey()), entry.getValue()));
+    }
+
+    private static String buildFeatureName(String prefix, String key) {
+        String safeKey = key == null ? "" : key;
+        switch (prefix) {
+            case "technical":
+                return "intraday_momentum_" + safeKey;
+            case "option":
+                return "option_" + safeKey;
+            case "global":
+                return featureFamilyForGlobalKey(safeKey) + "_" + safeKey;
+            case "news":
+                return "news_context_" + safeKey;
+            default:
+                return prefix + "_" + safeKey;
+        }
+    }
+
+    private static String featureFamilyForGlobalKey(String key) {
+        String normalized = key == null ? "" : key.toLowerCase(Locale.ROOT);
+        if (normalized.contains("overnight")) {
+            return "overnight_return";
+        }
+        if (normalized.contains("opening") || normalized.contains("gap")) {
+            return "opening_gap";
+        }
+        return "macro_context";
     }
 }

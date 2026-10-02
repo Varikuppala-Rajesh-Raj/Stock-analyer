@@ -18,6 +18,7 @@ export type Quote = {
   volume: number; 
   timestamp: string; 
 };
+
 export type Instrument = {
   instrumentKey: string;
   symbol: string;
@@ -31,7 +32,6 @@ export type Instrument = {
 export type Candle = 
   | [string, number, number, number, number, number] 
   | { timestamp: string; open: number; high: number; low: number; close: number; volume: number };
-
 export type ScannerResult = {
   symbol: string;
   signal: 'BUY' | 'SELL' | 'HOLD';
@@ -134,9 +134,10 @@ export type OptionCandidate = {
 };
 
 export type OptionOpportunity = {
+  status?: 'AVAILABLE' | 'DATA_INSUFFICIENT';
   symbol: string;
-  spot: number;
-  atmStrike: number;
+  spot: number | null;
+  atmStrike: number | null;
 
   recommendation: 'CE' | 'PE' | 'NO_TRADE';
 
@@ -146,6 +147,14 @@ export type OptionOpportunity = {
   peCandidates: OptionCandidate[];
 
   decisionReason: string;
+  dataQualityIssues?: string[];
+  scenario?: {
+    direction?: 'UP' | 'DOWN' | 'NEUTRAL' | null;
+    expectedReturnPercent?: number | null;
+    expectedMovePoints?: number | null;
+    horizonMinutes?: number | null;
+    status: 'AVAILABLE' | 'DATA_INSUFFICIENT';
+  };
 
   diagnostics?: {
     totalRows: number;
@@ -165,14 +174,14 @@ export type OptionOpportunity = {
     };
   };
 
-  niftyContext: {
-    direction: 'UP' | 'DOWN' | 'NEUTRAL';
-    expectedReturnPercent: number;
-    expectedMovePoints: number;
-    technicalSignal: 'BUY' | 'SELL' | 'HOLD';
-    technicalScore: number;
+  niftyContext?: {
+    direction?: 'UP' | 'DOWN' | 'NEUTRAL' | null;
+    expectedReturnPercent?: number | null;
+    expectedMovePoints?: number | null;
+    technicalSignal?: 'BUY' | 'SELL' | 'HOLD';
+    technicalScore?: number;
 
-    directionProbabilities: {
+    directionProbabilities?: {
       DOWN: number;
       NEUTRAL: number;
       UP: number;

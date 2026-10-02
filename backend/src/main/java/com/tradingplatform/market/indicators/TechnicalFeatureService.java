@@ -254,8 +254,6 @@ public Map<String, Double> calculateCanonicalFeatures(
 ) {
     validate(candles);
 
-    Candle latest = candles.get(candles.size() - 1);
-
     return CanonicalTechnicalFeatures.from(
             technicalStrategies.analyze(
                     new MarketContext(
