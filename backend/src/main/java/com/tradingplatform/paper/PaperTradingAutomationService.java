@@ -1,71 +1,60 @@
 package com.tradingplatform.paper;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.tradingplatform.market.ml.MlPredictionService;
 import com.tradingplatform.market.scenario.ScenarioExecutionResult;
 import com.tradingplatform.market.scenario.ScenarioExecutionService;
 import com.tradingplatform.market.scenario.ScenarioPaperTradeRequest;
-import java.math.BigDecimal;
+import com.tradingplatform.persistence.PaperOrderRepository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 @Service
 public class PaperTradingAutomationService {
-
     private final ScenarioExecutionService scenarioExecutionService;
-    private final MlPredictionService mlPredictionService;
+    private final PaperOrderRepository orders;
+    private final PaperAutomationControlService control;
     private final Duration idempotencyWindow;
     private final boolean enabled;
-    private final AtomicBoolean running = new AtomicBoolean(false);
+    private final double maxLossPercent;
+    private final double maxExposurePercent;
     private final ConcurrentHashMap<String, Instant> lastTradeAt = new ConcurrentHashMap<>();
 
-    @org.springframework.beans.factory.annotation.Autowired
     public PaperTradingAutomationService(
             ScenarioExecutionService scenarioExecutionService,
-            MlPredictionService mlPredictionService,
+            PaperOrderRepository orders,
+            PaperAutomationControlService control,
             @Value("${trading.paper.automation.idempotency-minutes:5}") long idempotencyMinutes,
-            @Value("${trading.paper.automation.enabled:true}") boolean enabled
-    ) {
-        this(scenarioExecutionService, mlPredictionService, Duration.ofMinutes(idempotencyMinutes), enabled);
-    }
-
-    public PaperTradingAutomationService(
-            ScenarioExecutionService scenarioExecutionService,
-            MlPredictionService mlPredictionService,
-            Duration idempotencyWindow,
-            boolean enabled
+            @Value("${trading.paper.automation.enabled:false}") boolean enabled,
+            @Value("${trading.paper.automation.max-loss-percent:1}") double maxLossPercent,
+            @Value("${trading.paper.automation.max-exposure-percent:20}") double maxExposurePercent
     ) {
         this.scenarioExecutionService = scenarioExecutionService;
-        this.mlPredictionService = mlPredictionService;
-        this.idempotencyWindow = idempotencyWindow == null ? Duration.ofMinutes(5) : idempotencyWindow;
+        this.orders = orders;
+        this.control = control;
+        this.idempotencyWindow = Duration.ofMinutes(idempotencyMinutes);
         this.enabled = enabled;
+        this.maxLossPercent = maxLossPercent;
+        this.maxExposurePercent = maxExposurePercent;
     }
 
-    public PaperTradingAutomationDecision runCycle(ScenarioPaperTradeRequest request) {
-        if (!enabled) {
-            return new PaperTradingAutomationDecision(false, "AUTOMATION_DISABLED", "", false, null);
+    public synchronized PaperTradingAutomationDecision runCycle(ScenarioPaperTradeRequest request) {
+        if (!isEnabled()) {
+            return rejected("AUTOMATION_DISABLED", request);
         }
         if (request == null) {
-            return new PaperTradingAutomationDecision(false, "REQUEST_MISSING", "", false, null);
+            return rejected("REQUEST_MISSING", null);
         }
-        if (request.marketOpen() == false) {
-            return new PaperTradingAutomationDecision(false, "MARKET_CLOSED", dedupeKey(request), false, null);
+        if (!request.marketOpen()) {
+            return rejected("MARKET_CLOSED", request);
         }
-        if (request.entryPrice() == null || request.entryPrice().compareTo(BigDecimal.ZERO) <= 0) {
-            return new PaperTradingAutomationDecision(false, "ENTRY_PRICE_MISSING", dedupeKey(request), false, null);
+        if (request.entryPrice() == null || request.entryPrice().signum() <= 0) {
+            return rejected("ENTRY_PRICE_MISSING", request);
         }
         if (request.optionSymbol() == null || request.optionSymbol().isBlank()) {
-            return new PaperTradingAutomationDecision(false, "OPTION_SYMBOL_MISSING", dedupeKey(request), false, null);
-        }
-        String modelGateFailure = modelGateFailure();
-        if (modelGateFailure != null) {
-            return new PaperTradingAutomationDecision(false, modelGateFailure, dedupeKey(request), false, null);
+            return rejected("OPTION_SYMBOL_MISSING", request);
         }
 
         String key = dedupeKey(request);
@@ -74,80 +63,70 @@ public class PaperTradingAutomationService {
         if (last != null && Duration.between(last, now).compareTo(idempotencyWindow) < 0) {
             return new PaperTradingAutomationDecision(false, "DUPLICATE_SIGNAL", key, false, null);
         }
+        if (request.optionSymbol().contains("|")
+                && orders.existsByInstrumentKeyAndCreatedAtAfterAndStatus(
+                        request.optionSymbol(), now.minus(idempotencyWindow), PaperOrderStatus.FILLED)) {
+            return new PaperTradingAutomationDecision(false, "DUPLICATE_SIGNAL", key, false, null);
+        }
 
-        ScenarioExecutionResult result = scenarioExecutionService.execute(request);
-        if (result == null || !result.allowed()) {
-            String reason = result == null || result.decision() == null || result.decision().reasons().isEmpty()
+        ScenarioExecutionResult result = scenarioExecutionService.execute(
+                request, maxLossPercent, maxExposurePercent);
+        boolean filled = result != null && result.allowed() && result.order() != null
+                && result.order().status() == PaperOrderStatus.FILLED;
+        if (!filled) {
+            String reason = result == null || result.decision() == null
                     ? "AUTO_REJECTED"
                     : String.join("|", result.decision().reasons());
-            return new PaperTradingAutomationDecision(false, reason, key, false, null);
+            if (result != null && result.order() != null
+                    && result.order().status() == PaperOrderStatus.REJECTED) {
+                reason = result.order().rejectionReason() == null
+                        ? "PAPER_ORDER_REJECTED"
+                        : "PAPER_ORDER_REJECTED:" + result.order().rejectionReason();
+            }
+            return new PaperTradingAutomationDecision(false, reason, key, false,
+                    result == null ? null : result.order());
         }
 
         lastTradeAt.put(key, now);
-        return new PaperTradingAutomationDecision(
-                true,
-                "TRADE_SUBMITTED",
-                key,
-                result.order() != null,
-                result.order()
-        );
-    }
-
-    @Scheduled(fixedDelayString = "${trading.paper.automation.interval-ms:60000}")
-    public void scheduledCycle() {
-        if (!enabled || !running.compareAndSet(false, true)) {
-            return;
-        }
-        try {
-            // Safe placeholder: the actual automation loop in this project is driven by a validated
-            // ScenarioPaperTradeRequest, which prevents duplicate trades and blocks invalid windows.
-        } finally {
-            running.set(false);
-        }
+        return new PaperTradingAutomationDecision(true, "TRADE_SUBMITTED", key, true, result.order());
     }
 
     public Map<String, Object> status() {
         return Map.of(
-                "enabled", enabled,
-                "running", running.get(),
+                "enabled", isEnabled(),
+                "configuredEnabled", enabled,
+                "stopped", control.isStopped(),
                 "idempotencyWindowMinutes", idempotencyWindow.toMinutes(),
+                "maxLotsPerTrade", 1,
+                "maxLossPercent", maxLossPercent,
+                "maxExposurePercent", maxExposurePercent,
                 "trackedSignals", lastTradeAt.size(),
-                "modelsEligibleForAutomation", modelGateFailure() == null
+                "modelGate", "NOT_REQUIRED_FOR_DETERMINISTIC_PAPER_TRADING"
         );
     }
 
-    private String modelGateFailure() {
-        try {
-            if (!validatedModel(mlPredictionService.modelStatus())) {
-                return "DIRECTION_MODEL_NOT_VALIDATED";
-            }
-            if (!validatedModel(mlPredictionService.magnitudeModelStatus())) {
-                return "MAGNITUDE_MODEL_NOT_VALIDATED";
-            }
-            if (!validatedModel(mlPredictionService.optionMagnitudeModelStatus())) {
-                return "OPTION_MODEL_NOT_VALIDATED";
-            }
-            return null;
-        } catch (RuntimeException exception) {
-            return "ML_SERVICE_UNAVAILABLE";
-        }
+    public boolean isEnabled() {
+        return enabled && !control.isStopped();
     }
 
-    private boolean validatedModel(JsonNode model) {
-        if (model == null
-                || !model.path("eligibleForAutomation").asBoolean(false)
-                || !"VALIDATED".equalsIgnoreCase(model.path("validationStatus").asText())
-                || model.path("modelVersion").asText().isBlank()
-                || !model.path("validationMethod").asText().toLowerCase().contains("chronological")
-                || model.path("trainingRows").asInt(0) <= 0
-                || model.path("validationRows").asInt(0) <= 0) {
-            return false;
+    public synchronized void stop() {
+        control.stop();
+    }
+
+    public synchronized void resume() {
+        if (!enabled) {
+            throw new IllegalStateException("Set PAPER_AUTO_TRADING=true before resuming automation");
         }
-        String status = model.path("status").asText();
-        return "VALIDATED".equalsIgnoreCase(status) || "READY".equalsIgnoreCase(status);
+        control.resume();
+    }
+
+    private PaperTradingAutomationDecision rejected(String reason, ScenarioPaperTradeRequest request) {
+        return new PaperTradingAutomationDecision(false, reason,
+                request == null ? "" : dedupeKey(request), false, null);
     }
 
     private String dedupeKey(ScenarioPaperTradeRequest request) {
-        return request.symbol() + "|" + request.optionSymbol() + "|" + request.direction() + "|" + request.expiry() + "|" + request.strike();
+        return request.symbol() + "|" + request.optionSymbol() + "|" + request.direction()
+                + "|" + request.expiry() + "|" + request.strike();
     }
 }

@@ -26,6 +26,14 @@ public class ScenarioExecutionService {
     }
 
     public ScenarioExecutionResult execute(ScenarioPaperTradeRequest request) {
+        return execute(request, 2.0, 2.0);
+    }
+
+    public ScenarioExecutionResult execute(
+            ScenarioPaperTradeRequest request,
+            double maxAllowedLossPercent,
+            double maxAllowedExposurePercent
+    ) {
         if (request == null) {
             throw new IllegalArgumentException("Scenario trade request is required.");
         }
@@ -37,7 +45,9 @@ public class ScenarioExecutionService {
                 request.riskRewardRatio(),
                 request.maxLossPercent(),
                 request.maxExposurePercent(),
-                request.marketOpen()
+                request.marketOpen(),
+                maxAllowedLossPercent,
+                maxAllowedExposurePercent
         );
 
         if (!decision.allowed()) {
@@ -65,14 +75,29 @@ public class ScenarioExecutionService {
         );
 
         PaperDtos.Order order = paperTradingEngine.submit(orderRequest);
-        journalService.recordTradeEntry(
-                request,
-                scenario,
-                decision,
-                order,
-                quantity,
-                optionSymbol
+        if (order.status() == com.tradingplatform.paper.PaperOrderStatus.FILLED) {
+            journalService.recordTradeEntry(
+                    request,
+                    scenario,
+                    decision,
+                    order,
+                    quantity,
+                    optionSymbol
+            );
+            return new ScenarioExecutionResult(scenario, decision, order);
+        }
+
+        ScenarioTradeDecision rejected = new ScenarioTradeDecision(
+                ScenarioTradeDecision.REJECT,
+                false,
+                java.util.List.of(order.rejectionReason() == null
+                        ? "PAPER_ORDER_REJECTED"
+                        : "PAPER_ORDER_REJECTED:" + order.rejectionReason()),
+                "NO_TRADE",
+                scenario.getSymbol()
         );
-        return new ScenarioExecutionResult(scenario, decision, order);
+        journalService.recordNoTrade(request, rejected, scenario,
+                "Paper order was rejected by the paper execution and risk controls.");
+        return new ScenarioExecutionResult(scenario, rejected, order);
     }
 }

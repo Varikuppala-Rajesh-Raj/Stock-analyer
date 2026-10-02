@@ -44,6 +44,7 @@ public class PaperTradeJournalService {
             entity.usedMargin = BigDecimal.ZERO;
             entity.realizedPnl = BigDecimal.ZERO;
             entity.dailyRealizedPnl = BigDecimal.ZERO;
+            entity.dailyPnlDate = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
             entity.createdAt = Instant.now();
             entity.updatedAt = Instant.now();
             return accountRepository.save(entity);
@@ -112,6 +113,7 @@ public class PaperTradeJournalService {
             entity.usedMargin = BigDecimal.ZERO;
             entity.realizedPnl = BigDecimal.ZERO;
             entity.dailyRealizedPnl = BigDecimal.ZERO;
+            entity.dailyPnlDate = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
             entity.createdAt = Instant.now();
             entity.updatedAt = Instant.now();
             return accountRepository.save(entity);

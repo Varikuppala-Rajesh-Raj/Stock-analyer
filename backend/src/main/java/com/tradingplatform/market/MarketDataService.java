@@ -45,7 +45,9 @@ public class MarketDataService {
   return new TrainingHistory(values,fetched.size(),fetched.size()-values.size());
  }
  public record TrainingHistory(List<Candle> candles,int fetchedRows,int duplicateRows) {}
- public Quote quote(String symbol) { Instrument i=instrument(symbol); return cache.getQuote(i.instrumentKey()).orElseGet(()->{Quote q=provider.getQuote(i); if (MarketDataNormalizer.isQuoteStale(q, quoteMaxAge)) throw new MarketDataUnavailableException("Quote for "+symbol+" is stale; data age exceeds configured maximum of "+quoteMaxAge.getSeconds()+" seconds."); cache.putQuote(i.instrumentKey(),q);return q;}); }
+ public Quote quote(String symbol) { return quote(instrument(symbol)); }
+ public Quote quote(Instrument instrument) { return cache.getQuote(instrument.instrumentKey()).filter(q->!MarketDataNormalizer.isQuoteStale(q,quoteMaxAge)).orElseGet(()->{Quote q=provider.getQuote(instrument); if (MarketDataNormalizer.isQuoteStale(q, quoteMaxAge)) throw new MarketDataUnavailableException("Quote for "+instrument.symbol()+" is stale; data age exceeds configured maximum of "+quoteMaxAge.getSeconds()+" seconds."); cache.putQuote(instrument.instrumentKey(),q);return q;}); }
+ public boolean usesLiveProvider() { return realHistoricalProviderSelected; }
  public List<Candle> history(String symbol, Timeframe timeframe, LocalDate from, LocalDate to) { Instrument i=instrument(symbol);String range=from+":"+to;return cache.getCandles(i.instrumentKey(),timeframe,range).orElseGet(()->{List<Candle> persisted=normalise(persistence.find(i.instrumentKey(),timeframe,from,to));int required=timeframe==Timeframe.M5?100:1;if(persisted.size()>=required){cache.putCandles(i.instrumentKey(),timeframe,range,persisted);return persisted;}List<Candle> c=normalise(provider.getHistoricalCandles(i.instrumentKey(),timeframe,from,to));if(c.isEmpty())throw new MarketDataUnavailableException("No historical "+timeframe+" candles are available for "+symbol);persistence.upsert(i.instrumentKey(),timeframe,c);cache.putCandles(i.instrumentKey(),timeframe,range,c);return c;}); }
 
  /** Cache-first intraday retrieval that returns a window suitable for technical analysis. */

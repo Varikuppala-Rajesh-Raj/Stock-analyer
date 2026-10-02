@@ -1,184 +1,122 @@
 package com.tradingplatform.paper;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-import com.tradingplatform.market.ml.MlPredictionService;
-import com.tradingplatform.market.scenario.*;
+import com.tradingplatform.market.scenario.ScenarioExecutionResult;
+import com.tradingplatform.market.scenario.ScenarioExecutionService;
+import com.tradingplatform.market.scenario.ScenarioPaperTradeRequest;
+import com.tradingplatform.market.scenario.ScenarioTradeDecision;
+import com.tradingplatform.market.scenario.MarketScenario;
+import com.tradingplatform.persistence.PaperOrderRepository;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class PaperTradingAutomationServiceTest {
-
     @Test
-    void allowsFirstTradeAndRejectsDuplicateSignalWithinWindow() {
+    void persistedEmergencyStopBlocksNewAutomatedOrders() {
         ScenarioExecutionService execution = mock(ScenarioExecutionService.class);
-                MlPredictionService ml = validatedModels();
-        when(execution.execute(any())).thenReturn(new ScenarioExecutionResult(
-                new MarketScenario("NIFTY", 22500.0, "UP", 120.0, 22620.0, 15, 0.72, "VALID"),
-                new ScenarioTradeDecision(ScenarioTradeDecision.ALLOW, true, java.util.List.of(), "BUY_CALL", "NIFTY"),
-                new PaperDtos.Order(
-                        UUID.randomUUID(),
-                        "NIFTY24000CE",
-                        PaperSide.BUY,
-                        1,
-                        BigDecimal.valueOf(145.25),
-                        BigDecimal.valueOf(145.25),
-                        PaperOrderStatus.FILLED,
-                        BigDecimal.ZERO,
-                        null,
-                        Instant.now()
-                )
-        ));
+        PaperAutomationControlService control = mock(PaperAutomationControlService.class);
+        when(control.isStopped()).thenReturn(true);
+        PaperTradingAutomationService service = new PaperTradingAutomationService(execution,
+                mock(PaperOrderRepository.class), control, 5, true, 1, 20);
 
-        PaperTradingAutomationService service = new PaperTradingAutomationService(
-                execution,
-                ml,
-                Duration.ofMinutes(5),
-                true
-        );
-
-        ScenarioPaperTradeRequest request = new ScenarioPaperTradeRequest(
-                "NIFTY",
-                "NIFTY24000CE",
-                "CE",
-                "24000",
-                "2025-06-26",
-                1,
-                22500.0,
-                "UP",
-                120.0,
-                22620.0,
-                15,
-                0.72,
-                "VALID",
-                0.9,
-                1.8,
-                1.5,
-                1.5,
-                true,
-                1,
-                BigDecimal.valueOf(145.25),
-                BigDecimal.valueOf(144.00),
-                BigDecimal.valueOf(146.50)
-        );
-
-        PaperTradingAutomationDecision first = service.runCycle(request);
-        PaperTradingAutomationDecision second = service.runCycle(request);
-
-        assertTrue(first.allowed());
-        assertFalse(second.allowed());
-        assertEquals("DUPLICATE_SIGNAL", second.reason());
-        verify(execution, times(1)).execute(any());
-    }
-
-    @Test
-    void rejectsWhenMarketClosed() {
-        ScenarioExecutionService execution = mock(ScenarioExecutionService.class);
-        PaperTradingAutomationService service = new PaperTradingAutomationService(
-                execution,
-                                validatedModels(),
-                Duration.ofMinutes(5),
-                true
-        );
-
-        ScenarioPaperTradeRequest request = new ScenarioPaperTradeRequest(
-                "NIFTY",
-                "NIFTY24000CE",
-                "CE",
-                "24000",
-                "2025-06-26",
-                1,
-                22500.0,
-                "UP",
-                120.0,
-                22620.0,
-                15,
-                0.72,
-                "VALID",
-                0.9,
-                1.8,
-                1.5,
-                1.5,
-                false,
-                1,
-                BigDecimal.valueOf(145.25),
-                BigDecimal.valueOf(144.00),
-                BigDecimal.valueOf(146.50)
-        );
-
-        PaperTradingAutomationDecision result = service.runCycle(request);
+        PaperTradingAutomationDecision result = service.runCycle(validRequest());
 
         assertFalse(result.allowed());
-        assertEquals("MARKET_CLOSED", result.reason());
-        verify(execution, never()).execute(any());
+        assertEquals("AUTOMATION_DISABLED", result.reason());
+        assertFalse((Boolean) service.status().get("enabled"));
+        verifyNoInteractions(execution);
     }
 
-        @Test
-        void rejectsAutomationWhenAnyModelHasOnlySyntheticOrUnvalidatedStatus() {
-                ScenarioExecutionService execution = mock(ScenarioExecutionService.class);
-                MlPredictionService ml = validatedModels();
-                ObjectNode unvalidated = validationMetadata();
-                unvalidated.put("status", "SYNTHETIC_BASELINE");
-                unvalidated.put("eligibleForAutomation", false);
-                when(ml.optionMagnitudeModelStatus()).thenReturn(unvalidated);
-                PaperTradingAutomationService service = new PaperTradingAutomationService(
-                                execution, ml, Duration.ofMinutes(5), true);
+    @Test
+    void submitsFirstFilledTradeAndRejectsDuplicateSignal() {
+        ScenarioExecutionService execution = mock(ScenarioExecutionService.class);
+        PaperDtos.Order order = filledOrder();
+        when(execution.execute(any(), anyDouble(), anyDouble())).thenReturn(
+                new ScenarioExecutionResult(
+                        new MarketScenario("NIFTY", 22500, "UP", 100, 22600, 15, .75, "VALID"),
+                        new ScenarioTradeDecision("ALLOW", true, List.of(), "BUY_CALL", "NIFTY"),
+                        order));
+        PaperTradingAutomationService service = new PaperTradingAutomationService(execution,
+                mock(PaperOrderRepository.class), mock(PaperAutomationControlService.class), 5, true, 1, 20);
 
-                PaperTradingAutomationDecision result = service.runCycle(validRequest());
+        PaperTradingAutomationDecision first = service.runCycle(validRequest());
+        PaperTradingAutomationDecision second = service.runCycle(validRequest());
 
-                assertFalse(result.allowed());
-                assertEquals("OPTION_MODEL_NOT_VALIDATED", result.reason());
-                verify(execution, never()).execute(any());
-        }
+        assertTrue(first.allowed());
+        assertTrue(first.tradeSubmitted());
+        assertFalse(second.allowed());
+        assertEquals("DUPLICATE_SIGNAL", second.reason());
+        verify(execution, times(1)).execute(any(), eq(1.0), eq(20.0));
+    }
 
-        @Test
-        void rejectsAutomationWhenMlServiceIsUnavailable() {
-                ScenarioExecutionService execution = mock(ScenarioExecutionService.class);
-                MlPredictionService ml = mock(MlPredictionService.class);
-                when(ml.modelStatus()).thenThrow(new IllegalStateException("connection refused"));
-                PaperTradingAutomationService service = new PaperTradingAutomationService(
-                                execution, ml, Duration.ofMinutes(5), true);
+    @Test
+    void rejectsWhenAutomationIsDisabled() {
+        ScenarioExecutionService execution = mock(ScenarioExecutionService.class);
+        PaperTradingAutomationService service = new PaperTradingAutomationService(execution,
+                mock(PaperOrderRepository.class), mock(PaperAutomationControlService.class), 5, false, 1, 20);
 
-                PaperTradingAutomationDecision result = service.runCycle(validRequest());
+        PaperTradingAutomationDecision result = service.runCycle(validRequest());
 
-                assertFalse(result.allowed());
-                assertEquals("ML_SERVICE_UNAVAILABLE", result.reason());
-                verify(execution, never()).execute(any());
-        }
+        assertFalse(result.allowed());
+        assertEquals("AUTOMATION_DISABLED", result.reason());
+        verifyNoInteractions(execution);
+    }
 
-        private MlPredictionService validatedModels() {
-                MlPredictionService ml = mock(MlPredictionService.class);
-                ObjectNode metadata = validationMetadata();
-                when(ml.modelStatus()).thenReturn(metadata);
-                when(ml.magnitudeModelStatus()).thenReturn(metadata);
-                when(ml.optionMagnitudeModelStatus()).thenReturn(metadata);
-                return ml;
-        }
+    @Test
+    void doesNotRecordRejectedPaperOrderAsSubmitted() {
+        ScenarioExecutionService execution = mock(ScenarioExecutionService.class);
+        PaperDtos.Order rejected = new PaperDtos.Order(UUID.randomUUID(), "NIFTY", PaperSide.BUY, 50,
+                BigDecimal.TEN, BigDecimal.TEN, PaperOrderStatus.REJECTED, BigDecimal.ZERO,
+                "Maximum allocation exceeded", Instant.now());
+        when(execution.execute(any(), anyDouble(), anyDouble())).thenReturn(
+                new ScenarioExecutionResult(
+                        new MarketScenario("NIFTY", 22500, "UP", 100, 22600, 15, .75, "VALID"),
+                        new ScenarioTradeDecision("REJECT", false,
+                                List.of("PAPER_ORDER_REJECTED:Maximum allocation exceeded"),
+                                "NO_TRADE", "NIFTY"),
+                        rejected));
+        PaperTradingAutomationService service = new PaperTradingAutomationService(execution,
+                mock(PaperOrderRepository.class), mock(PaperAutomationControlService.class), 5, true, 1, 20);
 
-        private ObjectNode validationMetadata() {
-                ObjectNode metadata = new ObjectMapper().createObjectNode();
-                metadata.put("status", "VALIDATED");
-                metadata.put("validationStatus", "VALIDATED");
-                metadata.put("eligibleForAutomation", true);
-                metadata.put("modelVersion", "test-model-v1");
-                metadata.put("validationMethod", "chronological 80/20 holdout");
-                metadata.put("trainingRows", 100);
-                metadata.put("validationRows", 20);
-                return metadata;
-        }
+        PaperTradingAutomationDecision result = service.runCycle(validRequest());
 
-        private ScenarioPaperTradeRequest validRequest() {
-                return new ScenarioPaperTradeRequest(
-                                "NIFTY", "NIFTY24000CE", "CE", "24000", "2025-06-26", 1,
-                                22500.0, "UP", 120.0, 22620.0, 15, 0.72, "VALID",
-                                0.9, 1.8, 1.5, 1.5, true, 1,
-                                BigDecimal.valueOf(145.25), BigDecimal.valueOf(144.00), BigDecimal.valueOf(146.50));
-        }
+        assertFalse(result.allowed());
+        assertFalse(result.tradeSubmitted());
+        assertTrue(result.reason().startsWith("PAPER_ORDER_REJECTED:"));
+    }
+
+    @Test
+    void rejectsRecentFilledContractFromPersistentLedgerAfterServiceRestart() {
+        ScenarioExecutionService execution = mock(ScenarioExecutionService.class);
+        PaperOrderRepository orders = mock(PaperOrderRepository.class);
+        when(orders.existsByInstrumentKeyAndCreatedAtAfterAndStatus(
+                eq("NSE_FO|NIFTY"), any(), eq(PaperOrderStatus.FILLED))).thenReturn(true);
+        PaperTradingAutomationService service = new PaperTradingAutomationService(execution, orders,
+                mock(PaperAutomationControlService.class), 5, true, 1, 20);
+
+        PaperTradingAutomationDecision result = service.runCycle(validRequest());
+
+        assertFalse(result.allowed());
+        assertEquals("DUPLICATE_SIGNAL", result.reason());
+        verifyNoInteractions(execution);
+    }
+
+    private static PaperDtos.Order filledOrder() {
+        return new PaperDtos.Order(UUID.randomUUID(), "NIFTY", PaperSide.BUY, 50,
+                BigDecimal.TEN, BigDecimal.TEN, PaperOrderStatus.FILLED, BigDecimal.ZERO,
+                null, Instant.now());
+    }
+
+    private static ScenarioPaperTradeRequest validRequest() {
+        return new ScenarioPaperTradeRequest("NIFTY", "NSE_FO|NIFTY", "CE", "22500", "2026-10-08",
+                50, 22500, "UP", 100, 22600, 15, .75, "VALID", .8, 2,
+                .8, 15, true, 50, BigDecimal.TEN, BigDecimal.valueOf(9), BigDecimal.valueOf(12));
+    }
 }

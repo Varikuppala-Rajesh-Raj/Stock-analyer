@@ -58,4 +58,18 @@ class MarketScenarioRiskGateServiceTest {
         assertTrue(!decision.allowed());
         assertEquals("REJECT", decision.status());
     }
+
+    @Test
+    void supportsConfiguredOneLotAutomationExposureAndRejectsLimitBreach() {
+        var scenario = new MarketScenario("NIFTY", 22800, "UP", 75, 22875, 15, .75, "VALID");
+        var gate = new MarketScenarioRiskGateService();
+
+        var withinPolicy = gate.evaluate(scenario, .8, 2, 1, 20, true, 1, 20);
+        var overPolicy = gate.evaluate(scenario, .8, 2, 1.01, 20.01, true, 1, 20);
+
+        assertTrue(withinPolicy.allowed());
+        assertTrue(!overPolicy.allowed());
+        assertTrue(overPolicy.reasons().contains("MAX_LOSS_LIMIT_EXCEEDED"));
+        assertTrue(overPolicy.reasons().contains("MAX_EXPOSURE_LIMIT_EXCEEDED"));
+    }
 }

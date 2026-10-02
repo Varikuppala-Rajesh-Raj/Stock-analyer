@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.Optional;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalInt;
 
 @Service
 public class NiftyOptionChainService {
@@ -157,6 +158,31 @@ public class NiftyOptionChainService {
                     .min(Comparator.comparing(LocalDate::parse));
         } catch (RestClientResponseException exception) {
             return Optional.empty();
+        }
+    }
+
+    public OptionalInt niftyOptionLotSize(String expiry, String optionInstrumentKey) {
+            if (expiry == null || expiry.isBlank() || optionInstrumentKey == null || optionInstrumentKey.isBlank()) {
+                throw new IllegalArgumentException("Expiry and option instrument key are required.");
+            }
+            try {
+                JsonNode payload = restClient.get()
+                        .uri(uriBuilder -> uriBuilder.path("/v2/option/contract")
+                                .queryParam("instrument_key", NIFTY_INDEX)
+                                .queryParam("expiry_date", expiry)
+                                .build())
+                        .retrieve()
+                        .body(JsonNode.class);
+            JsonNode data = payload == null ? null : payload.path("data");
+            if (data == null || !data.isArray()) return OptionalInt.empty();
+                for (JsonNode contract : data) {
+                    if (!optionInstrumentKey.equals(contract.path("instrument_key").asText())) continue;
+                    int lotSize = contract.path("lot_size").asInt(0);
+                    return lotSize > 0 ? OptionalInt.of(lotSize) : OptionalInt.empty();
+                }
+                return OptionalInt.empty();
+            } catch (RestClientException exception) {
+                throw new IllegalStateException("Unable to load official NIFTY option lot size.", exception);
         }
     }
 

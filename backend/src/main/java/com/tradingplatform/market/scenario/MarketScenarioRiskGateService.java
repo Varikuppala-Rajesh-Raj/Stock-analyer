@@ -15,6 +15,20 @@ public class MarketScenarioRiskGateService {
             double maxExposurePercent,
             boolean marketOpen
     ) {
+        return evaluate(scenario, optionLiquidityScore, riskRewardRatio, maxLossPercent,
+                maxExposurePercent, marketOpen, 2.0, 2.0);
+    }
+
+    public ScenarioTradeDecision evaluate(
+            MarketScenario scenario,
+            double optionLiquidityScore,
+            double riskRewardRatio,
+            double maxLossPercent,
+            double maxExposurePercent,
+            boolean marketOpen,
+            double maxAllowedLossPercent,
+            double maxAllowedExposurePercent
+    ) {
         List<String> reasons = new ArrayList<>();
 
         if (scenario == null) {
@@ -51,11 +65,11 @@ public class MarketScenarioRiskGateService {
             reasons.add("RISK_REWARD_TOO_LOW");
         }
 
-        if (maxLossPercent > 2.0) {
+        if (maxLossPercent > maxAllowedLossPercent) {
             reasons.add("MAX_LOSS_LIMIT_EXCEEDED");
         }
 
-        if (maxExposurePercent > 2.0) {
+        if (maxExposurePercent > maxAllowedExposurePercent) {
             reasons.add("MAX_EXPOSURE_LIMIT_EXCEEDED");
         }
 

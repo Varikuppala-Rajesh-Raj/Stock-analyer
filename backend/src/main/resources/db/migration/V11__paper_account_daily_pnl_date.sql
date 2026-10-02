@@ -1,0 +1,2 @@
+ALTER TABLE paper_accounts
+    ADD COLUMN daily_pnl_date DATE NOT NULL DEFAULT CURRENT_DATE;
