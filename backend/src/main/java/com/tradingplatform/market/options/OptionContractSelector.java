@@ -63,6 +63,17 @@ public class OptionContractSelector {
                 .max(Comparator.comparingDouble(Contract::score));
     }
 
+    public java.util.Map<String, Object> filterSettings() {
+        return java.util.Map.of(
+                "maxSpreadPercent", maxSpreadPercent,
+                "minVolume", minVolume,
+                "minOpenInterest", minOpenInterest,
+                "maxAtmDistancePercent", maxAtmDistancePercent,
+                "minAbsDelta", minAbsDelta,
+                "maxAbsDelta", maxAbsDelta
+        );
+    }
+
     private Optional<Contract> candidate(JsonNode row, String optionType) {
         BigDecimal strike = decimal(row, "strike_price");
         BigDecimal spot = decimal(row, "underlying_spot_price");

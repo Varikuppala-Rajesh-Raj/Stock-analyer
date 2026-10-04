@@ -13,6 +13,7 @@ import {
   type NiftyMarketData,
   type ProviderState,
 } from '../services/nseMarketData';
+import { api, type NiftyTradeRecommendation } from '../services/api';
 import './Nifty50.css';
 
 type MemberView = typeof NIFTY50_MEMBERS[number] & {
@@ -68,6 +69,9 @@ export function Nifty50() {
   const [refreshCount, setRefreshCount] = useState(0);
   const [pressure, setPressure] = useState<NiftyPressureResult | null>(null);
   const [pressureSampleCount, setPressureSampleCount] = useState(0);
+  const [recommendation, setRecommendation] = useState<NiftyTradeRecommendation | null>(null);
+  const [recommendationError, setRecommendationError] = useState('');
+  const [recommendationLoading, setRecommendationLoading] = useState(true);
   const pressureHistory = useRef<NiftyPressureSample[]>([]);
 
   useEffect(() => {
@@ -111,6 +115,32 @@ export function Nifty50() {
 
     void load();
     const timer = window.setInterval(() => void load(), 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [refreshCount]);
+
+  useEffect(() => {
+    let active = true;
+    const loadRecommendation = async () => {
+      try {
+        const next = await api.niftyTradeRecommendation();
+        if (active) {
+          setRecommendation(next);
+          setRecommendationError('');
+        }
+      } catch (reason) {
+        if (active) {
+          setRecommendationError(reason instanceof Error ? reason.message : 'Unable to load the trade recommendation.');
+        }
+      } finally {
+        if (active) setRecommendationLoading(false);
+      }
+    };
+
+    void loadRecommendation();
+    const timer = window.setInterval(() => void loadRecommendation(), 30_000);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -210,6 +240,12 @@ export function Nifty50() {
           <small>{unchanged} unchanged · {quoted}/50 quoted</small>
         </article>
       </section>
+
+      <NiftyTradeRecommendationPanel
+        recommendation={recommendation}
+        loading={recommendationLoading}
+        error={recommendationError}
+      />
 
       <NiftyPressurePanel
         pressure={pressure}
@@ -324,6 +360,62 @@ export function Nifty50() {
         </aside>
       </div>
     </main>
+  );
+}
+
+function NiftyTradeRecommendationPanel({
+  recommendation,
+  loading,
+  error,
+}: {
+  recommendation: NiftyTradeRecommendation | null;
+  loading: boolean;
+  error: string;
+}) {
+  const ready = recommendation?.status === 'READY';
+  const directionTone = recommendation?.direction === 'UP' ? 'up' : recommendation?.direction === 'DOWN' ? 'down' : '';
+  const action = recommendation?.optionType === 'CE'
+    ? 'BUY CALL (CE)'
+    : recommendation?.optionType === 'PE'
+      ? 'BUY PUT (PE)'
+      : 'NO TRADE';
+
+  return (
+    <section className={`nifty50-recommendation ${ready ? directionTone : ''}`} aria-label="Automated trade recommendation">
+      <div className="nifty50-recommendation-heading">
+        <div><small>READ-ONLY · DETERMINISTIC RISK ENGINE</small><h2>Automated trade recommendation</h2></div>
+        <strong className={ready ? directionTone : ''}>{loading ? 'Checking live conditions…' : error ? 'Unavailable' : action}</strong>
+      </div>
+      {error ? <p className="nifty50-recommendation-message error">{error}</p> : !ready ? (
+        <p className="nifty50-recommendation-message">
+          {loading ? 'Evaluating current NIFTY, futures, option-chain, and risk conditions.' : recommendation?.reason
+            ? `${readableState(recommendation.reason)} · no trade is recommended unless every live-data and risk check passes.`
+            : 'Waiting for a recommendation.'}
+        </p>
+      ) : (
+        <>
+          <div className="nifty50-recommendation-metrics">
+            <div><span>NIFTY direction</span><strong className={directionTone}>{recommendation.direction}</strong></div>
+            <div><span>Signal strength</span><strong>{recommendation.signalStrength}/100</strong><small>Rule-engine score, not probability</small></div>
+            <div><span>Expected NIFTY move</span><strong>{recommendation.expectedNiftyMovePoints == null ? '—' : `${recommendation.expectedNiftyMovePoints.toFixed(2)} pts`}</strong></div>
+            <div><span>Selected contract</span><strong>{recommendation.strike} {recommendation.optionType}</strong><small>{recommendation.expiry}</small></div>
+            <div><span>NIFTY spot</span><strong>{currency(recommendation.spotPrice)}</strong></div>
+            <div><span>Option bid / ask</span><strong>{currency(recommendation.bidPrice)} / {currency(recommendation.askPrice)}</strong></div>
+            <div><span>Option quote · entry</span><strong>{currency(recommendation.optionPrice)} · {currency(recommendation.entryPrice)}</strong><small>Indicative current paper-entry quote</small></div>
+            <div><span>Stop · target</span><strong>{currency(recommendation.stopLoss)} · {currency(recommendation.targetPrice)}</strong></div>
+            <div><span>Risk / reward</span><strong>1 : {recommendation.riskReward?.toFixed(2) ?? '—'}</strong></div>
+            <div><span>Quantity</span><strong>{recommendation.quantity ?? '—'}</strong><small>Official exchange quantity</small></div>
+          </div>
+          <div className="nifty50-recommendation-evidence">
+            <strong>Decision evidence</strong>
+            <ul>{recommendation.evidence.map(item => <li key={item}>{item}</li>)}</ul>
+          </div>
+        </>
+      )}
+      <p className="nifty50-recommendation-disclaimer">
+        This is an advisory paper-trade plan, not a promise of profit. It does not place an order. Live data, signal alignment, contract liquidity, and configured risk checks must all pass; otherwise the engine returns NO TRADE.
+      </p>
+    </section>
   );
 }
 

@@ -9,11 +9,14 @@ import java.math.BigDecimal;
 import java.time.*;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
+import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class OptionSnapshotService {
+    public record OptionPricePoint(Instant timestamp, BigDecimal price, BigDecimal volume) {}
+
     private final OptionMarketSnapshotRepository repository;
     private final ObjectMapper objectMapper;
     public OptionSnapshotService(OptionMarketSnapshotRepository repository, ObjectMapper objectMapper) { this.repository = repository; this.objectMapper = objectMapper; }
@@ -31,6 +34,25 @@ public class OptionSnapshotService {
             stored += save(timestamp, expiry, spot, strike, "PE", row.path("put_options"), technicalFeatures) ? 1 : 0;
         }
         return stored;
+    }
+
+    @Transactional(readOnly = true)
+    public List<OptionPricePoint> history(String instrumentKey, String expiryText, LocalDate from, LocalDate to) {
+        if (instrumentKey == null || instrumentKey.isBlank()) {
+            throw new IllegalArgumentException("Option instrument key is required.");
+        }
+        LocalDate expiry = LocalDate.parse(expiryText);
+        if (from == null || to == null || from.isAfter(to)) {
+            throw new IllegalArgumentException("History start date must be on or before the end date.");
+        }
+        Instant start = from.atStartOfDay(ZoneId.of("Asia/Kolkata")).toInstant();
+        Instant end = to.plusDays(1).atStartOfDay(ZoneId.of("Asia/Kolkata")).toInstant();
+        return repository.findByInstrumentKeyAndTimestampBetweenOrderByTimestampAsc(instrumentKey, start, end)
+                .stream()
+                .filter(snapshot -> expiry.equals(snapshot.expiry))
+                .map(snapshot -> new OptionPricePoint(snapshot.timestamp, snapshot.ltp,
+                        snapshot.volume == null ? BigDecimal.ZERO : snapshot.volume))
+                .toList();
     }
     private boolean save(Instant timestamp, LocalDate expiry, double spot, double strike, String type, JsonNode option, Map<String, Double> technical) {
         String key = option.path("instrument_key").asText(""); JsonNode market = option.path("market_data");

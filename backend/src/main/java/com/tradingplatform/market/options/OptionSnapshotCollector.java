@@ -16,7 +16,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class OptionSnapshotCollector {
     private final NiftyOptionChainService chains; private final OptionSnapshotService snapshots; private final MarketDataService market; private final AnalysisService analysis; private final boolean enabled;
-    public OptionSnapshotCollector(NiftyOptionChainService chains, OptionSnapshotService snapshots, MarketDataService market, AnalysisService analysis, @Value("${trading.options.collection-enabled:false}") boolean enabled) { this.chains=chains; this.snapshots=snapshots; this.market=market; this.analysis=analysis; this.enabled=enabled; }
+    public OptionSnapshotCollector(NiftyOptionChainService chains, OptionSnapshotService snapshots, MarketDataService market, AnalysisService analysis, @Value("${trading.options.collection-enabled:true}") boolean enabled) { this.chains=chains; this.snapshots=snapshots; this.market=market; this.analysis=analysis; this.enabled=enabled; }
     @Scheduled(cron = "${trading.options.collection-cron:0 */5 9-15 * * MON-FRI}", zone = "Asia/Kolkata")
     public void collectDuringMarketHours() { if (enabled && marketHours()) chains.nearestNiftyExpiry().ifPresent(this::collect); }
     public int collect(String expiry) {

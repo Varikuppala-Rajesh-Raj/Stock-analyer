@@ -62,4 +62,28 @@ class NiftyPaperTradingCycleServiceTest {
         verify(market).usesLiveProvider();
         verifyNoMoreInteractions(market);
     }
+
+    @Test
+    void recommendationIsReadOnlyAndDoesNotRequireAutomationToBeEnabled() {
+        MarketDataService market = mock(MarketDataService.class);
+        when(market.usesLiveProvider()).thenReturn(false);
+        PaperAutomationCycleRepository audit = mock(PaperAutomationCycleRepository.class);
+        ScenarioExecutionService execution = mock(ScenarioExecutionService.class);
+        PaperTradingAutomationService automation = new PaperTradingAutomationService(
+                execution, mock(PaperOrderRepository.class),
+                mock(PaperAutomationControlService.class), 5, false, 1, 20);
+        NiftyPaperTradingCycleService service = new NiftyPaperTradingCycleService(
+                market, mock(AnalysisService.class), mock(NseMarketContextService.class),
+                mock(NiftyOptionChainService.class), mock(OptionContractSelector.class),
+                mock(PaperTradingEngine.class), mock(PaperPriceService.class), automation, audit, 60,
+                BigDecimal.valueOf(30), BigDecimal.valueOf(2), BigDecimal.valueOf(1.5),
+                BigDecimal.valueOf(2), BigDecimal.valueOf(.2));
+
+        NiftyTradeRecommendation recommendation = service.recommendation();
+
+        assertEquals("NO_TRADE", recommendation.status());
+        assertEquals("LIVE_MARKET_DATA_REQUIRED", recommendation.reason());
+        verify(market).usesLiveProvider();
+        verifyNoInteractions(execution, audit);
+    }
 }

@@ -52,6 +52,7 @@ export type ScannerResponse = {
 export type Account = {
   initialBalance: number;
   availableCash: number;
+  usedMargin: number;
   realizedPnl: number;
   unrealizedPnl: number;
   totalPnl: number;
@@ -63,6 +64,7 @@ export type Account = {
 export type Position = {
   id: string;
   symbol: string;
+  exchange: string;
   side: string;
   quantity: number;
   averageEntryPrice: number;
@@ -72,6 +74,50 @@ export type Position = {
   stopLoss?: number;
   target?: number;
   status: string;
+  openedAt: string;
+};
+
+export type ManualTrade = {
+  id: string;
+  instrumentType: 'STOCK' | 'OPTION';
+  instrumentKey: string;
+  symbol: string;
+  exchange: string;
+  expiry: string | null;
+  optionType: 'CE' | 'PE' | null;
+  strike: number | null;
+  quantity: number;
+  entryPrice: number;
+  currentPrice: number;
+  exitPrice: number | null;
+  entryCharges: number;
+  exitCharges: number;
+  unrealizedPnl: number;
+  realizedPnl: number;
+  status: 'OPEN' | 'CLOSED';
+  openedAt: string;
+  closedAt: string | null;
+  priceUpdatedAt: string;
+};
+
+export type ManualPortfolio = {
+  trades: ManualTrade[];
+  realizedPnl: number;
+  unrealizedPnl: number;
+  totalPnl: number;
+  openTrades: number;
+  closedTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+};
+
+export type ManualTradeRequest = {
+  instrumentType: 'STOCK' | 'OPTION';
+  symbol?: string;
+  instrumentKey?: string;
+  expiry?: string;
+  optionType?: 'CE' | 'PE';
+  quantity: number;
 };
 
 export type PaperOrder = {
@@ -84,7 +130,189 @@ export type PaperOrder = {
   status: string;
   charges: number;
   rejectionReason?: string;
-  createdAt: string;
+  timestamp: string;
+};
+
+export type PaperAutomationCycle = {
+  timestamp: string;
+  status: string;
+  reason: string;
+  direction: string | null;
+  optionType: string | null;
+  expiry: string | null;
+  strike: number | null;
+  signalStrength: number | null;
+  order: PaperOrder | null;
+};
+
+export type PaperAutomationAudit = Omit<PaperAutomationCycle, 'order'> & {
+  id: string;
+  paperOrderId: string | null;
+};
+
+export type PaperAutomationStatus = {
+  automation: {
+    enabled: boolean;
+    configuredEnabled: boolean;
+    stopped: boolean;
+    idempotencyWindowMinutes: number;
+    maxLotsPerTrade: number;
+    maxLossPercent: number;
+    maxExposurePercent: number;
+    trackedSignals: number;
+    modelGate: string;
+  };
+  cycle: {
+    enabled: boolean;
+    running: boolean;
+    lastCycle: PaperAutomationCycle;
+  };
+};
+
+export type PaperDryRunSettings = {
+  defaultVirtualCapital: number;
+  defaultLotSize: number;
+  maxLossPercent: number;
+  maxExposurePercent: number;
+  maxStopLossPercent: number;
+  rewardRiskMultiple: number;
+  minRiskReward: number;
+  maxAllocationPerTrade: number;
+  maxDailyLoss: number;
+  maxOpenPositions: number;
+  maxTradesPerDay: number;
+  maxHoldingMinutes: number;
+  maxSpreadPercent: number;
+  minVolume: number;
+  minOpenInterest: number;
+  maxAtmDistancePercent: number;
+  minAbsDelta: number;
+  maxAbsDelta: number;
+  slippagePercent: number;
+  brokerageRate: number;
+};
+
+export type PaperDryRunCoverage = {
+  date: string;
+  timezone: string;
+  status: 'DATA_SUFFICIENT' | 'DATA_INSUFFICIENT';
+  expectedIntervals: number;
+  requiredIntervals: number;
+  minimumCoveragePercent: number;
+  optionSnapshotRows: number;
+  optionSnapshotIntervals: number;
+  optionIntervals: number;
+  spotIntervals: number;
+  spotConfirmationIntervals: number;
+  futuresIntervals: number;
+  firstSnapshot: string | null;
+  lastSnapshot: string | null;
+  firstSpotCandle: string | null;
+  lastSpotCandle: string | null;
+  firstFuturesObservation: string | null;
+  lastFuturesObservation: string | null;
+  futuresObservations: number;
+  spotSource: string;
+  coveragePercent: number;
+  missingOptionIntervals: string[];
+  missingSpotIntervals: string[];
+  missingSpotConfirmationIntervals: string[];
+  missingFuturesIntervals: string[];
+  ready: boolean;
+  note: string;
+};
+
+export type PaperDryRunSelection = {
+  instrumentKey: string;
+  optionType: 'CE' | 'PE';
+  strike: number;
+  spot: number;
+  ltp: number;
+  bid: number;
+  ask: number;
+  volume: number;
+  openInterest: number;
+  delta: number;
+  spreadPercent: number;
+  selectionScore: number;
+  selectionReason: string;
+};
+
+export type PaperDryRunCycle = {
+  timestamp: string;
+  status: string;
+  direction: 'UP' | 'DOWN' | null;
+  optionType: 'CE' | 'PE' | null;
+  strike: number | null;
+  expiry: string | null;
+  signalStrength: number | null;
+  reason: string;
+  selectedContract: PaperDryRunSelection | null;
+};
+
+export type PaperDryRunTrade = {
+  openedAt: string;
+  closedAt: string | null;
+  direction: 'UP' | 'DOWN';
+  optionType: 'CE' | 'PE';
+  expiry: string;
+  strike: number;
+  instrumentKey: string;
+  quantity: number;
+  entryPrice: number;
+  stopLoss: number;
+  target: number;
+  exitPrice: number | null;
+  lastPrice: number;
+  lastPriceAt: string;
+  exitReason: string;
+  grossPnl: number;
+  charges: number;
+  netPnl: number;
+  unrealizedPnl: number;
+  peakUnrealizedPnl: number;
+  signalStrength: number;
+  riskReward: number;
+  stopRiskPercent: number;
+  exposurePercent: number;
+  entryReason: string;
+  selectedContract: PaperDryRunSelection;
+};
+
+export type PaperDryRunResult = {
+  date: string;
+  generatedAt: string;
+  virtualCapital: number;
+  lotSize: number;
+  settings: PaperDryRunSettings;
+  data: {
+    optionSnapshotRows: number;
+    optionSnapshotIntervals: number;
+    futuresObservations: number;
+    niftyCandles: number;
+    maxCandlesAvailableAtDecision: number;
+    replayResolution: string;
+  };
+  summary: {
+    cycles: number;
+    tradeEntries: number;
+    closedTrades: number;
+    openTrades: number;
+    noTradeCycles: number;
+    winningClosedTrades: number;
+    losingClosedTrades: number;
+    realizedGrossPnl: number;
+    charges: number;
+    realizedNetPnl: number;
+    unrealizedPnl: number;
+    totalPnl: number;
+    returnPercent: number;
+    endingEquity: number;
+  };
+  trades: PaperDryRunTrade[];
+  cycles: PaperDryRunCycle[];
+  isHistoricalSimulation: boolean;
+  note: string;
 };
 
 export type OrderRequest = {
@@ -246,9 +474,38 @@ export type OptionChainResponse = {
   data: OptionChainRow[];
 };
 
+export type OptionPricePoint = {
+  timestamp: string;
+  price: number;
+  volume: number;
+};
+
 export type NiftyExpiriesResponse = {
   status: string;
   expiries: string[];
+};
+
+export type NiftyTradeRecommendation = {
+  timestamp: string;
+  status: 'READY' | 'NO_TRADE' | string;
+  reason: string;
+  direction: 'UP' | 'DOWN' | null;
+  optionType: 'CE' | 'PE' | null;
+  expiry: string | null;
+  strike: number | null;
+  instrumentKey: string | null;
+  spotPrice: number | null;
+  optionPrice: number | null;
+  bidPrice: number | null;
+  askPrice: number | null;
+  entryPrice: number | null;
+  stopLoss: number | null;
+  targetPrice: number | null;
+  riskReward: number | null;
+  signalStrength: number | null;
+  expectedNiftyMovePoints: number | null;
+  quantity: number | null;
+  evidence: string[];
 };
 // ============================================================
 // Request utilities
@@ -418,10 +675,56 @@ watchlistStream: () =>
     request<PaperOrder>(`/paper/positions/${id}/close`, {
       method: 'POST',
     }),
+
+  manualPortfolio: () =>
+    request<ManualPortfolio>('/manual-trading'),
+
+  buyManualTrade: (trade: ManualTradeRequest) =>
+    request<ManualTrade>('/manual-trading/trades', {
+      method: 'POST',
+      body: JSON.stringify(trade),
+    }),
+
+  sellManualTrade: (id: string) =>
+    request<ManualTrade>(`/manual-trading/trades/${encodeURIComponent(id)}/sell`, {
+      method: 'POST',
+    }),
   
   resetAccount: () =>
     request<Account>('/paper/account/reset', {
       method: 'POST',
+    }),
+
+  paperAutomationStatus: () =>
+    request<PaperAutomationStatus>('/paper/automation/status'),
+
+  niftyTradeRecommendation: () =>
+    request<NiftyTradeRecommendation>('/paper/automation/recommendation'),
+
+  stopPaperAutomation: () =>
+    request<PaperAutomationStatus>('/paper/automation/stop', { method: 'POST' }),
+
+  resumePaperAutomation: () =>
+    request<PaperAutomationStatus>('/paper/automation/resume', { method: 'POST' }),
+
+  runNiftyPaperCycle: () =>
+    request<PaperAutomationCycle>('/paper/automation/cycle', {
+      method: 'POST',
+    }),
+
+  paperAutomationCycles: () =>
+    request<PaperAutomationAudit[]>('/paper/automation/cycles'),
+
+  paperDryRunSettings: () =>
+    request<PaperDryRunSettings>('/paper/dry-run/settings'),
+
+  paperDryRunCoverage: (date: string) =>
+    request<PaperDryRunCoverage>(`/paper/dry-run/coverage?date=${encodeURIComponent(date)}`),
+
+  runPaperDryRun: (date: string, virtualCapital: number, lotSize: number) =>
+    request<PaperDryRunResult>('/paper/dry-run/run', {
+      method: 'POST',
+      body: JSON.stringify({ date, virtualCapital, lotSize }),
     }),
 
   // ML Service APIs (Python backend)
@@ -436,6 +739,10 @@ watchlistStream: () =>
   request<OptionChainResponse>(
     `/options/nifty/chain?expiry=${encodeURIComponent(expiry)}`
   ),
+  niftyOptionHistory: (instrumentKey: string, expiry: string) =>
+    request<OptionPricePoint[]>(
+      `/options/nifty/contract-history?instrumentKey=${encodeURIComponent(instrumentKey)}&expiry=${encodeURIComponent(expiry)}`
+    ),
   niftyNearestExpiry: () =>
   request<NiftyExpiryResponse>(
     '/options/nifty/expiry'

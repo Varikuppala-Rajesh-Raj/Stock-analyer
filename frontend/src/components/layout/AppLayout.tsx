@@ -1,11 +1,19 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { getNseMarketSession, getNseMarketSessionLabel } from '../../utils/marketSession';
 
 export function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 15000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const marketSession = getNseMarketSession(now);
 
   type NavItem = {
     path: string;
@@ -23,6 +31,8 @@ export function AppLayout() {
 { path: '/nifty-options', label: 'NIFTY Options', icon: '⌁', isNew: true },
 { path: '/ml-lab', label: 'ML Lab', icon: '✦', isNew: true },
     { path: '/paper-trading', label: 'Paper trading', icon: '▣' },
+    { path: '/manual-trading', label: 'Manual trading', icon: '⇄', isNew: true },
+    { path: '/paper-dry-run', label: 'Historical dry run', icon: '↻', isNew: true },
     { path: '/live-feed', label: 'Live feed', icon: '⌁' },
     { path: '/alerts', label: 'Alerts', icon: '♧' },
     { path: '/journal', label: 'Journal', icon: '▤' },
@@ -52,7 +62,7 @@ export function AppLayout() {
         <div className="side-bottom">
           <div className="paper">
             <b>◉ Paper mode</b>
-            <small>₹1,00,000 virtual capital</small>
+            <small>Virtual ledger · paper only</small>
           </div>
           <button>⚙ Settings</button>
           <button>? Support</button>
@@ -71,9 +81,12 @@ export function AppLayout() {
             />
             <kbd>⌘ K</kbd>
           </div>
-          <div className="clock">
-            <i />
-            Market open • {new Date().toLocaleTimeString('en-IN')} IST
+          <div className="clock market-clock">
+            <i style={{
+              background: marketSession === 'TRADING_WINDOW' ? '#e9b85f' : '#ff768f',
+              boxShadow: 'none',
+            }} />
+            {getNseMarketSessionLabel(now)} • {now.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST
           </div>
           <button className="bell">♧</button>
           <button className="avatar">RK</button>

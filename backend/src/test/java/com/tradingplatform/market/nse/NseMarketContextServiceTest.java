@@ -87,6 +87,23 @@ class NseMarketContextServiceTest {
     }
 
     @Test
+    void skipsStaleAndFutureDatedFuturesObservationsWhenPersisting() {
+        for (Instant timestamp : java.util.List.of(
+                Instant.now().minusSeconds(6 * 60L),
+                Instant.now().plusSeconds(60))) {
+            NseMarketDataController nse = mock(NseMarketDataController.class);
+            NseFuturesObservationService persisted = mock(NseFuturesObservationService.class);
+            NseMarketContextService service = service(nse, persisted);
+            when(nse.futures()).thenReturn(futuresPayload(
+                    200, 100, "FUTIDXNIFTY27-10-2026XX0.00", timestamp));
+
+            service.collectNow();
+
+            verify(persisted, never()).persist(any());
+        }
+    }
+
+    @Test
     void calculatesTenMinuteReturnsOnlyWhenARealNearTargetObservationExists() {
         NseMarketDataController nse = mock(NseMarketDataController.class);
         NseMarketContextService service = service(nse);

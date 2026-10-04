@@ -28,6 +28,11 @@ public class PaperTradingAutomationController {
         return Map.of("automation", automationService.status(), "cycle", cycleService.status());
     }
 
+    @GetMapping("/recommendation")
+    public com.tradingplatform.paper.NiftyTradeRecommendation recommendation() {
+        return cycleService.recommendation();
+    }
+
     @PostMapping("/cycle")
     public com.tradingplatform.paper.NiftyPaperTradingCycleResult runNiftyCycle() {
         return cycleService.runOnce();

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   useInstruments,
@@ -7,6 +8,7 @@ import {
   useWatchlistSubscription,
 } from '../services/hooks';
 import type { Instrument, Quote } from '../services/api';
+import './Watchlist.css';
 
 const DEFAULT_WATCHLIST = [
   'NIFTY',
@@ -14,7 +16,33 @@ const DEFAULT_WATCHLIST = [
   'RELIANCE',
 ];
 
-const STORAGE_KEY = 'watchlist';
+const STORAGE_KEY = 'watchlists';
+const ACTIVE_LIST_KEY = 'activeWatchlist';
+const LEGACY_STORAGE_KEY = 'watchlist';
+
+function readWatchlists(): Record<string, string[]> {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const parsed: unknown = JSON.parse(saved);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const valid = Object.entries(parsed).filter((entry): entry is [string, string[]] =>
+          typeof entry[0] === 'string' && Array.isArray(entry[1])
+          && entry[1].every((symbol) => typeof symbol === 'string'),
+        );
+        if (valid.length) return Object.fromEntries(valid);
+      }
+    }
+    const legacy: unknown = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) ?? 'null');
+    return {
+      'My Watchlist': Array.isArray(legacy)
+        ? legacy.filter((symbol): symbol is string => typeof symbol === 'string')
+        : DEFAULT_WATCHLIST,
+    };
+  } catch {
+    return { 'My Watchlist': DEFAULT_WATCHLIST };
+  }
+}
 
 export function Watchlist() {
   const navigate = useNavigate();
@@ -33,28 +61,20 @@ export function Watchlist() {
   // Watchlist state
   // ============================================================
 
-  const [watchlist, setWatchlist] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-
-      if (!saved) {
-        return DEFAULT_WATCHLIST;
-      }
-
-      const parsed = JSON.parse(saved);
-
-      return Array.isArray(parsed)
-        ? parsed
-        : DEFAULT_WATCHLIST;
-
-    } catch {
-      return DEFAULT_WATCHLIST;
-    }
+  const [watchlists, setWatchlists] = useState<Record<string, string[]>>(readWatchlists);
+  const [activeList, setActiveList] = useState(() => {
+    const saved = localStorage.getItem(ACTIVE_LIST_KEY);
+    return saved && Object.hasOwn(readWatchlists(), saved) ? saved : 'My Watchlist';
   });
+  const watchlist = watchlists[activeList] ?? [];
+  const allSymbols = [...new Set(Object.values(watchlists).flat())];
 
   const [query, setQuery] = useState('');
-  const watchlistRef = useRef(watchlist);
-  watchlistRef.current = watchlist;
+  const [newListName, setNewListName] = useState('');
+  const [creatingList, setCreatingList] = useState(false);
+  const [addingSymbol, setAddingSymbol] = useState('');
+  const watchlistRef = useRef(allSymbols);
+  watchlistRef.current = allSymbols;
 
   // ============================================================
   // Instrument finder
@@ -70,7 +90,6 @@ export function Watchlist() {
   const {
     subscribe,
     unsubscribe,
-    loading: subscriptionLoading,
     error: subscriptionError,
   } = useWatchlistSubscription();
 
@@ -83,9 +102,18 @@ export function Watchlist() {
   useEffect(() => {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify(watchlist)
+      JSON.stringify(watchlists)
     );
-  }, [watchlist]);
+  }, [watchlists]);
+
+  useEffect(() => {
+    if (Object.hasOwn(watchlists, activeList)) {
+      localStorage.setItem(ACTIVE_LIST_KEY, activeList);
+    } else {
+      const firstList = Object.keys(watchlists)[0] ?? 'My Watchlist';
+      setActiveList(firstList);
+    }
+  }, [activeList, watchlists]);
 
   // Re-establish subscriptions saved from a previous page load. Add/remove
   // actions below keep this set current for the rest of the session.
@@ -146,31 +174,25 @@ export function Watchlist() {
     instrument: Instrument
   ) => {
 
-    if (
-      watchlist.includes(instrument.symbol)
-    ) {
+    if (watchlist.includes(instrument.symbol)) {
       setFinderOpen(false);
       setFinderQuery('');
       return;
     }
 
+    setAddingSymbol(instrument.symbol);
+    setWatchlists(current => ({
+      ...current,
+      [activeList]: [...(current[activeList] ?? []), instrument.symbol],
+    }));
+    setFinderOpen(false);
+    setFinderQuery('');
     try {
-
-      // Tell backend to subscribe this instrument
-      // to the Upstox WebSocket.
-      await subscribe(instrument.symbol);
-
-      // Only add to UI after successful subscription.
-      setWatchlist(current => [
-        ...current,
-        instrument.symbol,
-      ]);
-
-      setFinderOpen(false);
-      setFinderQuery('');
-
+      if (!allSymbols.includes(instrument.symbol)) await subscribe(instrument.symbol);
     } catch {
-      // Error is already handled by hook.
+      // The local list remains available; the subscription error is shown above it.
+    } finally {
+      setAddingSymbol('');
     }
   };
 
@@ -181,23 +203,28 @@ export function Watchlist() {
   const removeInstrument = async (
     symbol: string
   ) => {
-
+    const remainsInAnotherList = Object.entries(watchlists)
+      .some(([name, symbols]) => name !== activeList && symbols.includes(symbol));
+    setWatchlists(current => ({
+      ...current,
+      [activeList]: (current[activeList] ?? []).filter(item => item !== symbol),
+    }));
     try {
-
-      // Tell backend to unsubscribe
-      // from Upstox WebSocket.
-      await unsubscribe(symbol);
-
-      // Remove from local watchlist.
-      setWatchlist(current =>
-        current.filter(
-          item => item !== symbol
-        )
-      );
-
+      if (!remainsInAnotherList) await unsubscribe(symbol);
     } catch {
-      // Error is already handled by hook.
+      // The local removal stands; the subscription error is shown above the list.
     }
+  };
+
+  const createWatchlist = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = newListName.trim();
+    if (!name || Object.hasOwn(watchlists, name)) return;
+    setWatchlists(current => ({ ...current, [name]: [] }));
+    setActiveList(name);
+    setNewListName('');
+    setCreatingList(false);
+    setQuery('');
   };
 
   // ============================================================
@@ -242,13 +269,29 @@ export function Watchlist() {
             setFinderOpen(true);
             setFinderQuery('');
           }}
-          disabled={subscriptionLoading}
         >
           + Add instrument
         </button>
 
       </div>
 
+      <section className="panel watchlist-manager" aria-label="Manage personal watchlists">
+        <label>
+          Your watchlists
+          <select value={activeList} onChange={event => { setActiveList(event.target.value); setQuery(''); }}>
+            {Object.keys(watchlists).map(name => <option key={name} value={name}>{name} ({watchlists[name].length})</option>)}
+          </select>
+        </label>
+        {creatingList ? (
+          <form onSubmit={createWatchlist}>
+            <input autoFocus value={newListName} onChange={event => setNewListName(event.target.value)} maxLength={40} placeholder="Name your watchlist" aria-label="New watchlist name" />
+            <button className="primary" type="submit" disabled={!newListName.trim() || Object.hasOwn(watchlists, newListName.trim())}>Create list</button>
+            <button className="outline" type="button" onClick={() => { setCreatingList(false); setNewListName(''); }}>Cancel</button>
+          </form>
+        ) : (
+          <button className="outline" onClick={() => setCreatingList(true)}>+ Create watchlist</button>
+        )}
+      </section>
 
       {/* ======================================================
           SUBSCRIPTION ERROR
@@ -350,7 +393,6 @@ export function Watchlist() {
             onRemove={() =>
               removeInstrument(symbol)
             }
-            removing={subscriptionLoading}
             liveQuote={quotesBySymbol[symbol]}
           />
 
@@ -476,10 +518,7 @@ export function Watchlist() {
                               instrument
                             )
                           }
-                          disabled={
-                            added ||
-                            subscriptionLoading
-                          }
+                          disabled={added || addingSymbol === instrument.symbol}
                         >
 
                           <span>
@@ -502,7 +541,7 @@ export function Watchlist() {
                           <em>
                             {added
                               ? 'Added'
-                              : subscriptionLoading
+                              : addingSymbol === instrument.symbol
                                 ? 'Adding…'
                                 : '+ Add'}
                           </em>
@@ -556,13 +595,11 @@ function WatchlistRow({
   symbol,
   onRemove,
   navigate,
-  removing,
   liveQuote,
 }: {
   symbol: string;
   onRemove: () => void;
   navigate: (to: string) => void;
-  removing: boolean;
   liveQuote?: Partial<Quote>;
 }) {
 
@@ -584,24 +621,26 @@ function WatchlistRow({
     displayedQuote?.price
   );
 
-  const open = Number(
-    displayedQuote?.open ??
-    last
-  );
+  const previousClose = Number(displayedQuote?.previousClose ?? quote?.previousClose);
 
   const validLast =
-    Number.isFinite(last);
+    Number.isFinite(last) && last > 0;
 
-  const validOpen =
-    Number.isFinite(open) &&
-    open > 0;
+  const validPreviousClose =
+    Number.isFinite(previousClose) && previousClose > 0;
 
-  const change =
-    validLast && validOpen
-      ? ((last - open) / open) * 100
-      : 0;
+  const changePercent = Number.isFinite(Number(displayedQuote?.changePercent))
+    ? Number(displayedQuote?.changePercent)
+    : validLast && validPreviousClose
+      ? ((last - previousClose) / previousClose) * 100
+      : null;
+  const changeAmount = Number.isFinite(Number(displayedQuote?.change))
+    ? Number(displayedQuote?.change)
+    : validLast && validPreviousClose
+      ? last - previousClose
+      : null;
 
-  const isUp = change >= 0;
+  const isUp = (changeAmount ?? changePercent ?? 0) >= 0;
 
 
   // ==========================================================
@@ -636,9 +675,9 @@ function WatchlistRow({
 
       <b>
 
-        {loading
+        {loading && !validLast
           ? 'Loading…'
-          : error
+        : error && !validLast
             ? 'Unavailable'
             : validLast
               ? `₹${last.toFixed(2)}`
@@ -657,12 +696,8 @@ function WatchlistRow({
         }
       >
 
-        {isUp
-          ? '↗ +'
-          : '↘ '}
-
-        {validLast && validOpen
-          ? `${change.toFixed(2)}%`
+        {changeAmount != null && changePercent != null
+          ? `${isUp ? '+' : ''}₹${changeAmount.toFixed(2)} (${isUp ? '+' : ''}${changePercent.toFixed(2)}%)`
           : 'N/A'}
 
       </span>
@@ -673,7 +708,6 @@ function WatchlistRow({
       <button
         className="remove"
         aria-label={`Remove ${symbol}`}
-        disabled={removing}
         onClick={event => {
 
           event.stopPropagation();

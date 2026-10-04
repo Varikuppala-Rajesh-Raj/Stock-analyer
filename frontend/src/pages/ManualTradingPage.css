@@ -1,0 +1,20 @@
+.manual-trading .api-state{margin:12px 0}
+.manual-success{color:#4adba7}
+.manual-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:18px}
+.manual-entry,.manual-history{margin-bottom:18px}
+.manual-tabs{display:flex;gap:8px;margin:18px 0}
+.manual-tabs button{border:1px solid #2d394d;background:#111722;color:#9ba7b9;padding:9px 14px;border-radius:6px;font-size:11px}
+.manual-tabs button.selected{border-color:#725fba;background:#282143;color:#e6ddff}
+.manual-entry-grid,.manual-option-controls{display:grid;grid-template-columns:minmax(170px,1.5fr) auto minmax(130px,1fr) auto;gap:12px;align-items:end}
+.manual-entry-grid label,.manual-option-controls label{display:grid;gap:6px;color:#9ba7b9;font-size:10px}
+.manual-entry-grid input,.manual-option-controls input,.manual-option-controls select{min-width:0;border:1px solid #303b50;border-radius:6px;background:#111722;color:#e9efff;padding:10px;font-size:12px}
+.manual-analysis{display:flex;flex-wrap:wrap;align-items:stretch;gap:12px;margin-top:18px;padding-top:16px;border-top:1px solid #232c3b}
+.manual-analysis>div{display:grid;gap:5px;min-width:145px;flex:1;padding:9px 11px;border:1px solid #252f40;border-radius:7px;background:#0d131d}
+.manual-analysis>div small,.manual-analysis>div span{font-size:9px;color:#8d99ac}
+.manual-analysis>div b{font-size:13px}
+.manual-analysis .outline{align-self:center;text-decoration:none;text-align:center}
+.manual-note{margin:15px 0 0;color:#7f8ca0;font-size:10px;line-height:1.7}
+.manual-table td small{display:block;margin-top:4px;color:#7f8ca0;font-size:9px}
+.manual-sell{border:1px solid #653342!important;border-radius:5px!important;padding:6px 10px!important;color:#ff91a5!important;background:#2a1820!important}
+@media(max-width:900px){.manual-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.manual-entry-grid,.manual-option-controls{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.manual-metrics{grid-template-columns:1fr 1fr}.manual-entry-grid,.manual-option-controls{grid-template-columns:1fr}.manual-table{min-width:780px}}

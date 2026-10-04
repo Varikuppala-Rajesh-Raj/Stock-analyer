@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useCandles, useQuote, useScanner, useSubmitOrder } from '../services/hooks';
+import { api, type ManualTrade } from '../services/api';
+import { useCandles, useQuote, useScanner } from '../services/hooks';
 import { PriceChart } from '../components/charts/PriceChart';
 
 const frames = ['1m', '5m', '15m', '1h', '1D'];
@@ -12,26 +13,72 @@ export function InstrumentDetail() {
   const navigate = useNavigate();
   const [timeframe, setTimeframe] = useState('15m');
   const [quantity, setQuantity] = useState('1');
-  const [stopLoss, setStopLoss] = useState('');
-  const [target, setTarget] = useState('');
   const [notice, setNotice] = useState('');
+  const [manualTrades, setManualTrades] = useState<ManualTrade[]>([]);
+  const [manualLoading, setManualLoading] = useState(false);
+  const [manualAction, setManualAction] = useState('');
+  const [manualError, setManualError] = useState('');
   const { quote, loading: quoteLoading } = useQuote(symbol, 10000);
   const { candles, loading: candlesLoading, error: candleError } = useCandles(symbol, timeframe, true);
   const { signals, loading: scannerLoading } = useScanner(timeframe, 30000);
-  const { submit, loading: submitting, error: orderError } = useSubmitOrder();
   const lastPrice = Number(quote?.lastPrice ?? quote?.price);
-  const openPrice = Number(quote?.open ?? lastPrice);
-  const change = openPrice ? ((lastPrice - openPrice) / openPrice) * 100 : 0;
+  const previousClose = Number(quote?.previousClose ?? lastPrice);
+  const change = previousClose ? ((lastPrice - previousClose) / previousClose) * 100 : 0;
   const signal = signals?.find((item: any) => item.symbol?.toUpperCase() === symbol.toUpperCase());
   const isMlSupported = symbol.toUpperCase() === 'NIFTY';
 
-  const placeOrder = async (side: 'BUY' | 'SELL') => {
-    setNotice('');
+  const loadManualTrades = async () => {
+    setManualLoading(true);
+    setManualError('');
     try {
-      await submit({ symbol, side, quantity: Math.max(1, Number(quantity) || 1), stopLoss: stopLoss ? Number(stopLoss) : undefined, target: target ? Number(target) : undefined });
-      setNotice(`${side} paper order filled. Review it in Paper trading.`);
-    } catch { /* hook exposes the message */ }
+      const portfolio = await api.manualPortfolio();
+      setManualTrades(portfolio.trades.filter((trade) =>
+        trade.instrumentType === 'STOCK' && trade.symbol.toUpperCase() === symbol.toUpperCase(),
+      ));
+    } catch (error) {
+      setManualError(error instanceof Error ? error.message : 'Unable to load manual holdings.');
+    } finally {
+      setManualLoading(false);
+    }
   };
+
+  const buyManual = async () => {
+    setManualAction('BUY');
+    setNotice('');
+    setManualError('');
+    try {
+      const trade = await api.buyManualTrade({
+        instrumentType: 'STOCK',
+        symbol,
+        quantity: Math.max(1, Number(quantity) || 1),
+      });
+      setNotice(`Bought ${trade.quantity} ${trade.symbol} at ${money(trade.entryPrice)}. This is a manual paper trade.`);
+      await loadManualTrades();
+    } catch (error) {
+      setManualError(error instanceof Error ? error.message : 'Unable to open a manual paper trade.');
+    } finally {
+      setManualAction('');
+    }
+  };
+
+  const sellManual = async (trade: ManualTrade) => {
+    setManualAction(trade.id);
+    setNotice('');
+    setManualError('');
+    try {
+      const closed = await api.sellManualTrade(trade.id);
+      setNotice(`Sold ${closed.quantity} ${closed.symbol}. Realized P&L: ${money(closed.realizedPnl)}.`);
+      await loadManualTrades();
+    } catch (error) {
+      setManualError(error instanceof Error ? error.message : 'Unable to sell this manual holding.');
+    } finally {
+      setManualAction('');
+    }
+  };
+
+  useEffect(() => {
+    void loadManualTrades();
+  }, [symbol]);
   const trainCompanyModel = () => {
     if (isMlSupported) navigate('/ml-lab');
     else setNotice(`${symbol} is ready for company-level research, but the connected model service currently supports NIFTY training only. Select NIFTY in ML Lab to run a real model.`);
@@ -57,15 +104,29 @@ export function InstrumentDetail() {
       </section>
     </div>
     <div className="two lower">
-      <section className="panel"><div className="panel-title"><div><small>PAPER TRADE</small><h2>Buy or sell {symbol}</h2></div><span className="pill ready">SIMULATED</span></div>
-        <div className="order-fields"><label>Quantity<input min="1" type="number" value={quantity} onChange={e => setQuantity(e.target.value)} /></label><label>Stop loss<input type="number" placeholder="Optional" value={stopLoss} onChange={e => setStopLoss(e.target.value)} /></label><label>Target<input type="number" placeholder="Optional" value={target} onChange={e => setTarget(e.target.value)} /></label></div>
-        <div className="order-actions"><button className="primary buy-order" disabled={submitting} onClick={() => placeOrder('BUY')}>{submitting ? 'Submitting…' : 'Buy'}</button><button className="primary sell-order" disabled={submitting} onClick={() => placeOrder('SELL')}>{submitting ? 'Submitting…' : 'Sell / Short'}</button></div>
-        {(notice || orderError) && <p className={orderError ? 'bad' : 'good'}>{orderError || notice}</p>}</section>
+      <section className="panel">
+        <div className="panel-title"><div><small>MANUAL PAPER TRADE</small><h2>Buy or sell {symbol}</h2></div><span className="pill ready">NO BROKER ORDERS</span></div>
+        <p>Manual holdings and P&amp;L are recorded separately from automated paper trading.</p>
+        <div className="order-fields"><label>Quantity<input min="1" step="1" type="number" value={quantity} onChange={e => setQuantity(e.target.value)} /></label></div>
+        <div className="order-actions"><button className="primary buy-order" disabled={manualLoading || manualAction !== '' || !Number.isInteger(Number(quantity)) || Number(quantity) < 1} onClick={() => void buyManual()}>{manualAction === 'BUY' ? 'Buying…' : 'Buy and hold'}</button><button className="outline" disabled={manualLoading || manualAction !== ''} onClick={() => void loadManualTrades()}>{manualLoading ? 'Refreshing…' : 'Refresh holdings'}</button></div>
+        {manualError && <p className="bad" role="alert">{manualError}</p>}
+        {notice && <p className="good" role="status">{notice}</p>}
+        <div className="manual-instrument-holdings">
+          <h3>Open manual holdings · {symbol}</h3>
+          {manualLoading && manualTrades.length === 0 ? <p>Loading holdings…</p>
+            : manualTrades.filter(trade => trade.status === 'OPEN').length === 0 ? <p>No open manual holding for this stock.</p>
+              : manualTrades.filter(trade => trade.status === 'OPEN').map(trade => (
+                <div className="manual-instrument-holding" key={trade.id}>
+                  <span>{trade.quantity} shares · entry {money(trade.entryPrice)} · now {money(trade.currentPrice)}</span>
+                  <b className={trade.unrealizedPnl >= 0 ? 'good' : 'bad'}>{money(trade.unrealizedPnl)} P&amp;L</b>
+                  <button className="outline" disabled={manualAction !== ''} onClick={() => void sellManual(trade)}>{manualAction === trade.id ? 'Selling…' : 'Sell holding'}</button>
+                </div>
+              ))}
+        </div>
+      </section>
       <section className="panel"><small>SMART WORKFLOW</small><h2>Trade with a plan</h2><div className="workflow"><span>1</span><p><b>Watch</b><small>Save the company and monitor live movement.</small></p><span>2</span><p><b>Validate</b><small>Use chart, signal reasons, risk level and target.</small></p><span>3</span><p><b>Practice</b><small>Execute a protected paper trade before real capital.</small></p></div></section>
     </div>
   </main>;
 }
 
 function Metric({ label, value, detail, tone = '' }: { label: string; value: string; detail: string; tone?: string }) { return <div className="card"><span>{label}</span><b>{value}</b><small className={tone}>{detail}</small></div>; }
-
-

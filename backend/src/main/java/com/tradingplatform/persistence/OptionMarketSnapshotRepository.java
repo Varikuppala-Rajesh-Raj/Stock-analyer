@@ -10,4 +10,6 @@ public interface OptionMarketSnapshotRepository extends JpaRepository<OptionMark
     List<OptionMarketSnapshotEntity> findByInstrumentKeyAndTimestampBetweenOrderByTimestampAsc(String instrumentKey, Instant from, Instant to);
     List<OptionMarketSnapshotEntity> findBySymbolOrderByTimestampAsc(String symbol);
     List<OptionMarketSnapshotEntity> findBySymbolAndExpiryOrderByTimestampDesc(String symbol, java.time.LocalDate expiry);
+    List<OptionMarketSnapshotEntity> findBySymbolAndTimestampBetweenOrderByTimestampAsc(
+            String symbol, Instant from, Instant to);
 }

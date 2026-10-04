@@ -93,6 +93,7 @@ services:
       # Market Data
       # ========================================
       MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-mock}
+      TRADING_OPTIONS_COLLECTION_ENABLED: ${TRADING_OPTIONS_COLLECTION_ENABLED:-false}
 
       # Mock stream
       MOCK_INSTRUMENT_KEY: ${MOCK_INSTRUMENT_KEY:-MOCK|NIFTY25000CE}

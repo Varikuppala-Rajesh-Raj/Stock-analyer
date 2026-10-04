@@ -82,6 +82,125 @@
   background: #10161d;
 }
 
+.nifty50-recommendation {
+  margin: 0 0 17px;
+  border: 1px solid #34424d;
+  background: #10161d;
+}
+
+.nifty50-recommendation.up {
+  border-color: #26775d;
+}
+
+.nifty50-recommendation.down {
+  border-color: #8b4144;
+}
+
+.nifty50-recommendation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 14px 17px;
+  border-bottom: 1px solid #25303b;
+}
+
+.nifty50-recommendation-heading small,
+.nifty50-recommendation-evidence > strong {
+  color: #94a0ae;
+  font: 9px 'DM Mono', monospace;
+  text-transform: uppercase;
+}
+
+.nifty50-recommendation-heading h2 {
+  margin: 4px 0 0;
+  color: #e8eef2;
+  font-size: 15px;
+}
+
+.nifty50-recommendation-heading > strong {
+  color: #dce4e7;
+  font: 14px 'DM Mono', monospace;
+  text-align: right;
+}
+
+.nifty50-recommendation-heading > strong.up {
+  color: #42d6a1;
+}
+
+.nifty50-recommendation-heading > strong.down {
+  color: #ff8884;
+}
+
+.nifty50-recommendation-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.nifty50-recommendation-metrics > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-right: 1px solid #25303b;
+  border-bottom: 1px solid #25303b;
+}
+
+.nifty50-recommendation-metrics span,
+.nifty50-recommendation-metrics small {
+  color: #94a0ae;
+  font-size: 10px;
+}
+
+.nifty50-recommendation-metrics strong {
+  overflow-wrap: anywhere;
+  color: #eef3f6;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.nifty50-recommendation-metrics strong.up {
+  color: #42d6a1;
+}
+
+.nifty50-recommendation-metrics strong.down {
+  color: #ff8884;
+}
+
+.nifty50-recommendation-evidence {
+  padding: 12px 14px 4px;
+}
+
+.nifty50-recommendation-evidence ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 8px 0;
+  padding-left: 17px;
+  color: #c3cdd4;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.nifty50-recommendation-message,
+.nifty50-recommendation-disclaimer {
+  margin: 0;
+  padding: 12px 14px;
+  color: #aab5be;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.nifty50-recommendation-message.error {
+  color: #ffaaa5;
+}
+
+.nifty50-recommendation-disclaimer {
+  padding-top: 4px;
+  color: #82909f;
+}
+
 .nifty50-engine-heading {
   display: flex;
   align-items: center;
@@ -262,6 +381,10 @@
 }
 
 @media (max-width: 900px) {
+  .nifty50-recommendation-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .nifty50-engine-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -276,6 +399,15 @@
 }
 
 @media (max-width: 560px) {
+  .nifty50-recommendation-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .nifty50-recommendation-heading > strong {
+    text-align: left;
+  }
+
   .nifty50-engine-heading {
     align-items: flex-start;
     flex-direction: column;

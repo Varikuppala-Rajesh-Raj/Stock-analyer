@@ -73,7 +73,7 @@ Cloud/CDN (CloudFront)
 
 ## 📋 Features
 
-> **Implementation status:** this repository currently contains Phase 1 foundations only: the three runnable service skeletons, container builds, health checks, and PAPER-only configuration. The checklists below are target scope, not completed functionality. See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+> **Implementation status:** the repository has market-data, analysis, option-chain, paper-ledger, and ML foundations. NIFTY CE/PE automated paper trading now has a deterministic scheduled pipeline, but it is **disabled by default** and requires configured live data, the instrument master, and a suitably sized virtual account. The feature checklists below are a mixture of implemented capabilities and roadmap items; see [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) and [PROJECT_PHASE_AUDIT.md](PROJECT_PHASE_AUDIT.md).
 
 ### Market Data & Analysis
 - [x] Search Indian stocks (NSE/BSE)
@@ -97,10 +97,32 @@ Cloud/CDN (CloudFront)
 - [x] Equity and drawdown curves
 
 ### Paper Trading
-- [x] Virtual capital (₹100,000 initial)
+- [x] Virtual capital (configurable; defaults to ₹10,000)
 - [x] BUY/SELL/CLOSE orders
 - [x] Position tracking and P&L
 - [x] Portfolio management
+- [x] Scheduled NIFTY direction + futures confirmation and CE/PE paper-entry pipeline (disabled by default)
+- [x] One-exchange-lot sizing with a 1% stop-risk cap and 20% notional exposure cap
+- [x] Option liquidity/spread filters, duplicate-signal guard, and persisted cycle decisions
+- [x] Periodic fresh-price position monitoring for stop, target, and max-holding-time exits
+- [x] Paper portfolio dashboard with account metrics, open positions, order events, and expandable automation decision audit
+- [x] Persistent emergency stop/resume control for automated paper entries
+
+To enable the NIFTY paper cycle, configure `MARKET_DATA_PROVIDER=upstox`, Upstox credentials, and `PAPER_AUTO_TRADING=true`. Import the current official instrument master and set virtual capital/allocation limits large enough for one current NIFTY option lot. No real-broker order path is enabled by this feature. Inspect `/api/paper/automation/status` and `/api/paper/automation/cycles` before relying on it.
+
+Use the dashboard's **STOP AUTOMATION** action (or `POST /api/paper/automation/stop`) to persistently block new automated entries; it survives backend restarts. Resuming requires the explicit dashboard action or `POST /api/paper/automation/resume` and still requires `PAPER_AUTO_TRADING=true`. The emergency stop does not disable monitoring or exits for positions already open.
+
+The current order/cycle records do not yet persist per-order exit reasons, peak holding price, realized P&L allocation for partial closes, raw spot/futures snapshots, or option-filter pass/fail details. The dashboard labels these audit limits rather than inferring or fabricating them.
+
+The UI market-hours indicator uses the India Standard Time weekday/session window only. It cannot confirm NSE holiday closures; a displayed trading window is not proof that the exchange is open or that market data is fresh.
+
+Use **Historical dry run** (`/paper-dry-run`) to select a previous date and replay automated NIFTY option decisions from saved option-chain snapshots, futures observations, and persisted NIFTY M5 candles. It reports contract-selection rationale, risk levels, trade P&L, estimated charges, unrealized P&L, and the reasons for skipped entries. The replay is isolated from both the live broker and the normal paper account; it reads persisted data only and never fetches or fills missing historical values. Coverage is measured on the IST session grid and replay is blocked unless every input has at least 72 of 75 required intervals. Option-chain collection is disabled by default; with a supported live market-data configuration, set `TRADING_OPTIONS_COLLECTION_ENABLED=true` in `.env` to begin collecting snapshots prospectively (Docker Compose passes this setting through). Option chains and NSE futures are collected live; this project has no historical option-chain backfill, so old dates without recorded chains cannot be reconstructed. A date also needs previously collected futures observations and spot candles. Option snapshots do not retain historical exchange lot size, so verify and set the lot quantity for the selected date.
+
+Use **Manual trading** (`/manual-trading`) for simulated stock and NIFTY option entries you choose yourself. The page shows quote/option-chain analysis, lets you hold open positions and sell them, and reports realized and unrealized P&L after estimated brokerage. Its records and P&L use a dedicated ledger and do not change the automated paper-trading account or its performance.
+
+The **Watchlist** page displays last traded price and day change from the previous close, and supports multiple named personal lists. These lists are stored in the current browser's local storage and are not synchronized across browsers or devices.
+
+From **NIFTY Options**, select a call or put premium to open its contract detail page. Contract details include the current chain quote and Greeks, saved option-premium chart snapshots when available, and manual buy/hold/sell actions. Option history is collected prospectively; a chart is empty until the selected contract has saved snapshots.
 
 ### Analytics
 - [x] Stock scanner with configurable filters

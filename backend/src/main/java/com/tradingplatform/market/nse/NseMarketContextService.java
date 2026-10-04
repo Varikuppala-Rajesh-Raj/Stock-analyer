@@ -160,14 +160,18 @@ public class NseMarketContextService {
             double underlyingValue = requiredNumber(row, "underlyingValue");
             Long openInterest = optionalLong(row, "openInterest");
             if (openInterest == null) throw new IllegalArgumentException("NSE Futures OI is missing.");
-                NseFuturesObservation observation = new NseFuturesObservation(timestamp, sourceTimestamp, identifier,
+            NseFuturesObservation observation = new NseFuturesObservation(timestamp, sourceTimestamp, identifier,
                     text(row, "instrumentType"), text(row, "expiryDate"), price,
                     optionalNumber(row, "openPrice"), optionalNumber(row, "highPrice"), optionalNumber(row, "lowPrice"),
                     optionalNumber(row, "prevClose"), optionalNumber(row, "change"), optionalNumber(row, "pchange"),
                     openInterest, optionalLong(row, "changeinOpenInterest"),
                     optionalNumber(row, "pchangeinOpenInterest"), optionalLong(row, "totalTradedVolume"),
                     optionalNumber(row, "totalTurnover"), text(row, "underlying"), underlyingValue);
+            if (isFresh(timestamp, Instant.now())) {
                 futuresObservations.persist(observation);
+            } else {
+                log.warn("[NSE-CONTEXT] Skipping stale futures observation timestamped {}", sourceTimestamp);
+            }
             if (!futuresHistory.isEmpty()
                     && !futuresHistory.lastEntry().getValue().identifier().equals(identifier)) {
                 futuresHistory.clear();
@@ -228,8 +232,12 @@ public class NseMarketContextService {
     private Status sourceStatus(Instant sourceTimestamp, String failure, Instant now) {
         if (failure != null) return Status.UNAVAILABLE;
         if (sourceTimestamp == null) return Status.COLLECTING;
+        return isFresh(sourceTimestamp, now) ? Status.AVAILABLE : Status.STALE;
+    }
+
+    private boolean isFresh(Instant sourceTimestamp, Instant now) {
         Duration age = Duration.between(sourceTimestamp, now);
-        return age.isNegative() || age.compareTo(staleAfter) > 0 ? Status.STALE : Status.AVAILABLE;
+        return !age.isNegative() && age.compareTo(staleAfter) <= 0;
     }
 
     private static Metric leadMetric(Metric futures5m, Metric nifty5m) {

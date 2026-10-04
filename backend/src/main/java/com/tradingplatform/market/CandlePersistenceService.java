@@ -1,3 +1,48 @@
 package com.tradingplatform.market;
-import com.tradingplatform.persistence.*; import java.time.*; import java.util.*; import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
-@Service public class CandlePersistenceService { private final CandleRepository candles; public CandlePersistenceService(CandleRepository candles){this.candles=candles;} @Transactional public void upsert(String key,Timeframe timeframe,List<Candle> values){for(Candle c:values){CandleEntity e=candles.findByInstrumentKeyAndTimeframeAndTimestamp(key,timeframe.name(),c.timestamp()).orElseGet(CandleEntity::new);e.instrumentKey=key;e.timeframe=timeframe.name();e.timestamp=c.timestamp();e.open=c.open();e.high=c.high();e.low=c.low();e.close=c.close();e.volume=c.volume();candles.save(e);}} public List<Candle> find(String key, Timeframe timeframe, LocalDate from, LocalDate to){Instant start=from.atStartOfDay(ZoneOffset.UTC).toInstant();Instant end=to.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().minusMillis(1);return candles.findByInstrumentKeyAndTimeframeAndTimestampBetweenOrderByTimestampAsc(key,timeframe.name(),start,end).stream().map(e->new Candle(e.timestamp,e.open,e.high,e.low,e.close,e.volume)).toList();} }
+
+import com.tradingplatform.persistence.CandleEntity;
+import com.tradingplatform.persistence.CandleRepository;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.List;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class CandlePersistenceService {
+    private static final ZoneId INDIA = ZoneId.of("Asia/Kolkata");
+    private final CandleRepository candles;
+
+    public CandlePersistenceService(CandleRepository candles) {
+        this.candles = candles;
+    }
+
+    @Transactional
+    public void upsert(String key, Timeframe timeframe, List<Candle> values) {
+        for (Candle candle : values) {
+            CandleEntity entity = candles.findByInstrumentKeyAndTimeframeAndTimestamp(
+                    key, timeframe.name(), candle.timestamp()).orElseGet(CandleEntity::new);
+            entity.instrumentKey = key;
+            entity.timeframe = timeframe.name();
+            entity.timestamp = candle.timestamp();
+            entity.open = candle.open();
+            entity.high = candle.high();
+            entity.low = candle.low();
+            entity.close = candle.close();
+            entity.volume = candle.volume();
+            candles.save(entity);
+        }
+    }
+
+    public List<Candle> find(String key, Timeframe timeframe, LocalDate from, LocalDate to) {
+        Instant start = from.atStartOfDay(INDIA).toInstant();
+        Instant end = to.plusDays(1).atStartOfDay(INDIA).toInstant().minusNanos(1);
+        return candles.findByInstrumentKeyAndTimeframeAndTimestampBetweenOrderByTimestampAsc(
+                        key, timeframe.name(), start, end)
+                .stream()
+                .map(entity -> new Candle(entity.timestamp, entity.open, entity.high, entity.low,
+                        entity.close, entity.volume))
+                .toList();
+    }
+}

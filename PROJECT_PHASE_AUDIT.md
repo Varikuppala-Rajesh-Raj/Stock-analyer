@@ -2,7 +2,16 @@
 
 ## Status
 
-This document captures the repository audit completed for Phase 0 and the implementation status for the remaining phases.
+This document includes a historical phase checklist; a PASS in that checklist is not proof of live-data or production operation.
+
+### Current milestone status — 2026-10-03
+
+- Automated NIFTY CE/PE paper-trading v1 is implemented: deterministic M5 direction with fresh NIFTY/futures confirmation, live option filtering and selection, official lot sizing, risk checks, paper orders, automatic exits, and persisted cycle outcomes.
+- The portfolio dashboard now exposes account/P&L, open positions, paper order history, automation decisions, and a persistent emergency stop/resume control. Automation remains disabled by default.
+- The stop state is persisted through Flyway V12; stop prevents new automated entries but does not disable position monitoring/exits.
+- No live market session has been verified. At the time of this implementation the NSE market was closed, so no live-data paper cycle was run.
+- Latest validation: 10 focused backend tests passed, including Spring/Flyway startup and stop persistence; 41 frontend tests passed, including a controlled fixture-driven entry → holding → exit dashboard flow; frontend production build and `git diff --check` passed. The complete backend suite currently has 3 failures in the untouched `NseMarketContextServiceTest` (2 errors and 1 failure).
+- Before operational validation: configure Upstox live data, import current instruments, apply Flyway migrations through V12, and set virtual equity/allocation sufficient for one lot.
 
 - Phase 0: PASS
 - Phase 1: PASS
@@ -21,11 +30,11 @@ This document captures the repository audit completed for Phase 0 and the implem
 - Phase 14: PASS
 - Phase 15: PASS
 - Phase 16: PASS
-- Phase 17: PASS
+- Phase 17: PASS (paper ledger and automated NIFTY paper cycle); live operational validation pending
 - Phase 18: PASS
 - Phase 19: PASS
 - Phase 20: PASS
-- Phase 21: PASS WITH OPERATIONAL ACTIONS
+- Phase 21: OPERATIONAL VALIDATION PENDING
 - Phase 1 included a focused market-data foundation hardening update without breaking the existing Upstox-based architecture.
 - Phase 2 added optional configured global-instrument support and timestamped derived-return calculations.
 
@@ -352,11 +361,11 @@ This is the right foundation for the final target architecture, but the pipeline
 | Phase 14 | Model Retraining | PASS |
 | Phase 15 | Model Registry | PASS |
 | Phase 16 | Option Opportunity Engine | PASS |
-| Phase 17 | Paper Trading | PASS |
-| Phase 18 | Dashboard | PASS |
+| Phase 17 | Paper Trading | PASS (automated NIFTY paper operation still needs live validation) |
+| Phase 18 | Dashboard | PASS (paper portfolio, orders, positions, cycle audit, persistent automation stop) |
 | Phase 19 | Observability | PASS |
 | Phase 20 | Testing | PASS |
-| Phase 21 | Production Hardening | PASS WITH OPERATIONAL ACTIONS |
+| Phase 21 | Production Hardening | OPERATIONAL VALIDATION PENDING |
 
 ---
 

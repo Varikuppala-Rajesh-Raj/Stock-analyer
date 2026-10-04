@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api, type OptionChainRow } from '../../services/api';
+import './OptionChain.css';
 
 const number = new Intl.NumberFormat('en-IN', {
   maximumFractionDigits: 2,
@@ -24,6 +26,7 @@ export function OptionChain({
   expiries,
   onExpiryChange,
 }: Props) {
+  const navigate = useNavigate();
   const [rows, setRows] = useState<OptionChainRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -205,96 +208,121 @@ export function OptionChain({
               const isAtm =
                 row.strike_price === atmStrike;
 
+              const call = row.call_options;
+              const put = row.put_options;
+              const callChange = call.market_data.close_price > 0
+                ? ((call.market_data.ltp - call.market_data.close_price) / call.market_data.close_price) * 100
+                : null;
+              const putChange = put.market_data.close_price > 0
+                ? ((put.market_data.ltp - put.market_data.close_price) / put.market_data.close_price) * 100
+                : null;
+              const openContract = (type: 'CE' | 'PE', key: string) => {
+                if (!key) return;
+                const search = new URLSearchParams({
+                  expiry,
+                  type,
+                  strike: String(row.strike_price),
+                  key,
+                });
+                navigate(`/nifty-options/contract?${search.toString()}`);
+              };
+
               return (
                 <tr
                   key={row.strike_price}
-                  className={isAtm ? 'atm-row' : ''}
+                  className={`${isAtm ? 'atm-row' : ''} ${row.strike_price < spot ? 'below-spot' : 'above-spot'}`}
                 >
 
                   {/* CALL */}
 
-                  <td>
-                    {money(row.call_options.market_data.ltp)}
+                  <td className="call-cell">
+                    <button className="option-contract-link call-contract" disabled={!call.instrument_key} onClick={() => openContract('CE', call.instrument_key)} aria-label={`Open NIFTY ${row.strike_price} call option`}>
+                      <b>{money(call.market_data.ltp)}</b>
+                      <small className={callChange == null ? '' : callChange >= 0 ? 'option-positive' : 'option-negative'}>
+                        {callChange == null ? 'Select call' : `${callChange >= 0 ? '+' : ''}${callChange.toFixed(2)}%`}
+                      </small>
+                    </button>
                   </td>
 
-                  <td>
+                  <td className="call-cell">
                     {compact.format(
-                      row.call_options.market_data.oi
+                      call.market_data.oi
                     )}
                   </td>
 
-                  <td>
+                  <td className="call-cell">
                     {compact.format(
-                      row.call_options.market_data.volume
+                      call.market_data.volume
                     )}
                   </td>
 
-                  <td>
-                    {row.call_options.option_greeks.iv.toFixed(2)}%
+                  <td className="call-cell">
+                    {call.option_greeks.iv.toFixed(2)}%
                   </td>
 
-                  <td>
-                    {row.call_options.option_greeks.delta.toFixed(3)}
+                  <td className="call-cell">
+                    {call.option_greeks.delta.toFixed(3)}
                   </td>
 
-                  <td>
+                  <td className="call-cell">
                     {number.format(
-                      row.call_options.market_data.bid_price
+                      call.market_data.bid_price
                     )}
                     {' / '}
                     {number.format(
-                      row.call_options.market_data.ask_price
+                      call.market_data.ask_price
                     )}
                   </td>
 
                   {/* STRIKE */}
 
-                  <td className="strike-cell">
+                  <td className={`strike-cell ${isAtm ? 'atm-strike' : ''}`}>
                     <b>
                       {number.format(row.strike_price)}
                     </b>
 
-                    {isAtm && (
-                      <span className="atm-badge">
-                        ATM
-                      </span>
-                    )}
+                    <span className="strike-distance">{row.strike_price < spot ? 'ITM' : row.strike_price > spot ? 'OTM' : 'ATM'}</span>
                   </td>
 
                   {/* PUT */}
 
-                  <td>
+                  <td className="put-cell">
                     {number.format(
-                      row.put_options.market_data.bid_price
+                      put.market_data.bid_price
                     )}
                     {' / '}
                     {number.format(
-                      row.put_options.market_data.ask_price
+                      put.market_data.ask_price
                     )}
                   </td>
 
-                  <td>
-                    {row.put_options.option_greeks.delta.toFixed(3)}
+                  <td className="put-cell">
+                    {put.option_greeks.delta.toFixed(3)}
                   </td>
 
-                  <td>
-                    {row.put_options.option_greeks.iv.toFixed(2)}%
+                  <td className="put-cell">
+                    {put.option_greeks.iv.toFixed(2)}%
                   </td>
 
-                  <td>
+                  <td className="put-cell">
                     {compact.format(
-                      row.put_options.market_data.volume
+                      put.market_data.volume
                     )}
                   </td>
 
-                  <td>
+                  <td className="put-cell">
                     {compact.format(
-                      row.put_options.market_data.oi
+                      put.market_data.oi
                     )}
                   </td>
 
-                  <td>
-                    {money(row.put_options.market_data.ltp)}
+                  <td className="put-cell">
+                    <button className="option-contract-link put-contract" disabled={!put.instrument_key} onClick={() => openContract('PE', put.instrument_key)} aria-label={`Open NIFTY ${row.strike_price} put option`}>
+                      <b>{money(put.market_data.ltp)}</b>
+                      <small className={putChange == null ? '' : putChange >= 0 ? 'option-positive' : 'option-negative'}>
+                        {putChange == null ? 'Select put' : `${putChange >= 0 ? '+' : ''}${putChange.toFixed(2)}%`}
+                      </small>
+                    </button>
                   </td>
 
                 </tr>

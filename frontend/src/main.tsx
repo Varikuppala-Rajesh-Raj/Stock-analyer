@@ -13,12 +13,15 @@ import { Watchlist } from './pages/Watchlist';
 import { InstrumentDetail } from './pages/InstrumentDetail';
 import { Strategies } from './pages/Strategies';
 import { MlLab } from './pages/MlLab'   ;
-import { PaperTrading } from './pages/PaperTrading';
+import { PaperTradingPage } from './pages/PaperTradingPage';
+import { PaperDryRunPage } from './pages/PaperDryRunPage';
 import { LiveFeed } from './pages/LiveFeed';
 import { Alerts } from './pages/Alerts';
 import { Journal } from './pages/Journal';
 import { NiftyOptions } from './pages/NiftyOptions';
 import { Nifty50 } from './pages/Nifty50';
+import { ManualTradingPage } from './pages/ManualTradingPage';
+import { NiftyOptionDetailPage } from './pages/NiftyOptionDetailPage';
 
 function App() {
   return (
@@ -35,7 +38,10 @@ function App() {
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/ml-lab" element={<MlLab />} />
           <Route path="/nifty-options" element={<NiftyOptions />} />
-          <Route path="/paper-trading" element={<PaperTrading />} />
+          <Route path="/nifty-options/contract" element={<NiftyOptionDetailPage />} />
+          <Route path="/paper-trading" element={<PaperTradingPage />} />
+          <Route path="/manual-trading" element={<ManualTradingPage />} />
+          <Route path="/paper-dry-run" element={<PaperDryRunPage />} />
           <Route path="/live-feed" element={<LiveFeed />} />
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/journal" element={<Journal />} />
