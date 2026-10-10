@@ -503,6 +503,7 @@ export type NiftyTradeRecommendation = {
   targetPrice: number | null;
   riskReward: number | null;
   signalStrength: number | null;
+  technicalSignal: 'BUY' | 'SELL' | 'HOLD' | null;
   expectedNiftyMovePoints: number | null;
   quantity: number | null;
   evidence: string[];

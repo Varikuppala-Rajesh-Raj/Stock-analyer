@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   computeBreadth,
+  computeConstituentMarketStatistics,
   computeChangeOiPcr,
   computeFutureBasis,
   computePcr,
@@ -9,6 +10,8 @@ import {
   computeWeightedConstituentReturn,
   computeWeightedAttribution,
   computeNiftyPressure,
+  computeNiftyIndexWindowReturns,
+  parseNiftyIndexCandles,
   computeMarketDirection,
   estimateSupportResistance,
   classifyFuturesPositioning,
@@ -26,7 +29,10 @@ import {
 } from './nseMarketData';
 import { NIFTY50_MEMBERS, NIFTY50_SECTORS, NIFTY50_WEIGHTS } from '../data/nifty50';
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 const testThresholds = {
   momentumDirectionPct: 0.05,
@@ -104,6 +110,71 @@ function makeBackendContext(spot = 100): BackendNseMarketContext {
 }
 
 describe('nse market data helpers', () => {
+  it('parses same-day NIFTY candles and calculates 5m, 10m, 15m, and 30m index returns', () => {
+    const now = Date.parse('2026-10-05T08:30:00.000Z');
+    const start = Date.parse('2026-10-05T07:30:00.000Z');
+    const payload = {
+      grapthData: Array.from({ length: 61 }, (_, index) => [
+        start + index * 60_000,
+        100,
+        103,
+        99,
+        index <= 30 ? 100 : 100 + (index - 30) / 10,
+        1_000,
+      ]),
+    };
+
+    const candles = parseNiftyIndexCandles(payload, now);
+    const returns = computeNiftyIndexWindowReturns(candles, null, now);
+
+    expect(candles).toHaveLength(61);
+    expect(returns[5]).toBeCloseTo((103 - 102.5) / 102.5 * 100);
+    expect(returns[10]).toBeCloseTo((103 - 102) / 102 * 100);
+    expect(returns[15]).toBeCloseTo((103 - 101.5) / 101.5 * 100);
+    expect(returns[30]).toBeCloseTo(3);
+  });
+
+  it('does not use yesterday, stale, or poorly aligned NIFTY index candles', () => {
+    const now = Date.parse('2026-10-05T08:30:00.000Z');
+    const yesterday = Date.parse('2026-10-04T08:00:00.000Z');
+    const candles = parseNiftyIndexCandles({
+      grapthData: [
+        [yesterday, 100, 100, 100, 100, 1],
+        [Date.parse('2026-10-05T08:20:00.000Z'), 100, 100, 100, 100, 1],
+        [Date.parse('2026-10-05T08:29:00.000Z'), 100, 100, 100, 101, 1],
+      ],
+    }, now);
+
+    expect(candles).toHaveLength(2);
+    expect(computeNiftyIndexWindowReturns(candles, null, now)).toEqual({
+      5: null, 10: null, 15: null, 30: null,
+    });
+  });
+
+  it('falls back to Upstox intraday candles when NSE index history is unavailable', async () => {
+    const latestTimestamp = new Date(Date.now() - 60_000).toISOString();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, statusText: 'Unavailable' })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{
+          timestamp: latestTimestamp, open: 100, high: 101, low: 99, close: 100.5, volume: 1_000,
+        }],
+      });
+    vi.stubGlobal('fetch', fetchMock);
+      const provider = new NseMarketDataProvider(
+      'http://localhost:8080/api/nse',
+      'http://localhost:8080/api'
+    );
+
+    const result = await provider.getNiftyIndexCandles();
+
+    expect(result.source).toBe('UPSTOX');
+    expect(result.candles).toHaveLength(1);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:8080/api/nse/index-candles', expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:8080/api/market/nifty-index-intraday', expect.any(Object));
+  });
+
   it('combines constituent pressure with spot and futures confirmation', () => {
     const pressure = computeNiftyPressure([
       { timestamp: 0, niftyPrice: 100, constituents: [{ symbol: 'A', ltp: 100, open: 100, weight: 100 }] },
@@ -156,6 +227,31 @@ describe('nse market data helpers', () => {
     expect(analysis.direction).toBe('COLLECTING');
     expect(analysis.score).toBeNull();
     expect(analysis.strength).toBe('COLLECTING');
+    expect(analysis.constituentPressureWindowMinutes).toBeNull();
+  });
+
+  it('uses fresh one-minute constituent pressure while the five-minute window collects', () => {
+    const pressure = computeNiftyPressure([
+      { timestamp: 0, niftyPrice: 100, constituents: [{ symbol: 'A', ltp: 100, open: 100, weight: 100 }] },
+      { timestamp: 60_000, niftyPrice: 100.02, constituents: [{ symbol: 'A', ltp: 100.02, open: 100, weight: 100 }] },
+    ]);
+    const bundle = makeBundle(100);
+    const features = buildBackendFeatureSnapshot(bundle, makeBackendContext());
+    bundle.features = features && {
+      ...features,
+      niftyReturn5mStatus: 'COLLECTING',
+      futuresReturn5mStatus: 'COLLECTING',
+    };
+
+    const analysis = computeMarketDirection(pressure, bundle);
+
+    expect(pressure?.horizons[1]?.coveredWeightPercent).toBe(100);
+    expect(pressure?.horizons[5]).toBeNull();
+    expect(analysis.direction).toBe('UP');
+    expect(analysis.score).toBe(100);
+    expect(analysis.constituentPressureWindowMinutes).toBe(1);
+    expect(analysis.spotConfirmation).toBe('COLLECTING');
+    expect(analysis.futuresConfirmation).toBe('COLLECTING');
   });
 
   it('marks stale spot and futures as stale and excludes them from the score', () => {
@@ -270,6 +366,25 @@ describe('nse market data helpers', () => {
     expect(breadth.averageConstituentReturn).toBeCloseTo(-0.175, 3);
   });
 
+  it('derives market breadth from the constituent quote endpoint fields', () => {
+    const stats = computeConstituentMarketStatistics([
+      { symbol: 'A', ltp: 101, previousClose: 100, change: 1, changePercent: 1, volume: 12 },
+      { symbol: 'B', ltp: 99, previousClose: 100, change: -1, changePercent: -1, volume: 20 },
+      { symbol: 'C', ltp: 100, previousClose: 100, change: 0, changePercent: 0, volume: 8 },
+      { symbol: 'D', ltp: 100, previousClose: null, change: null, changePercent: null, volume: null },
+    ], '2026-10-08T10:10:00.000Z');
+
+    expect(stats).toEqual({
+      advances: 1,
+      declines: 1,
+      unchanged: 1,
+      volume: 40,
+      turnover: null,
+      timestamp: '2026-10-08T10:10:00.000Z',
+    });
+    expect(computeConstituentMarketStatistics([], '2026-10-08T10:10:00.000Z')).toBeNull();
+  });
+
   it('calculates weighted constituent return', () => {
     const weighted = computeWeightedConstituentReturn([
       { symbol: 'A', changePercent: 2.5, weight: 0.4 },
@@ -339,7 +454,146 @@ describe('nse market data helpers', () => {
     expect(result.data?.timestamp).toBe('29-Sep-2026 15:30');
   });
 
+  it('loads timestamped GIFT NIFTY data from the backend route', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-08T09:30:00Z'));
+    const timestamp = recentNseTimestamp();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        timestamp,
+        data: [{ symbol: 'GIFT NIFTY', lastPrice: '25,123.50', previousClose: '25,000.00' }],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new NseMarketDataProvider('http://localhost/api/nse').getGiftNifty();
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost/api/nse/gift-nifty', expect.any(Object));
+    expect(result.status).toBe('live');
+    expect(result.data).toMatchObject({
+      symbol: 'GIFT NIFTY',
+      ltp: 25123.5,
+      previousClose: 25000,
+      change: 123.5,
+      changePercent: 0.494,
+    });
+  });
+
+  it('loads and validates the combined India VIX and FII/DII premarket route', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-08T09:30:00Z'));
+    const reportDate = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(Date.now() - 24 * 60 * 60_000).replaceAll(' ', '-');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        indiaVix: {
+          symbol: 'INDIA VIX',
+          last: '13.59',
+          change: '-1.19',
+          percentChange: '-8.03',
+          open: '14.78',
+          high: '14.78',
+          low: '13.52',
+          previousClose: '14.78',
+          timestamp: recentNseTimestamp(),
+        },
+        fiiDii: {
+          value: [
+            { category: 'DII', date: reportDate, buyValue: '20,146.40', sellValue: '15,057.48', netValue: '5,088.92' },
+            { category: 'FII/FPI', date: reportDate, buyValue: '11,258.72', sellValue: '14,220.02', netValue: '-2,961.30' },
+          ],
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new NseMarketDataProvider('http://localhost/api/nse').getPremarketFeeds();
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost/api/nse/premarket', expect.any(Object));
+    expect(result.status).toBe('live');
+    expect(result.data?.indiaVix).toMatchObject({ ltp: 13.59, change: -1.19, changePercent: -8.03 });
+    expect(result.data?.indiaVixStatus).toBe('live');
+    expect(result.data?.fiiDii).toEqual([
+      { category: 'DII', date: reportDate, buyValue: 20146.4, sellValue: 15057.48, netValue: 5088.92 },
+      { category: 'FII/FPI', date: reportDate, buyValue: 11258.72, sellValue: 14220.02, netValue: -2961.3 },
+    ]);
+    expect(result.data?.fiiDiiStatus).toBe('report-collected');
+  });
+
+  it('preserves valid India VIX data when the FII/DII payload is invalid', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-08T09:30:00Z'));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        indiaVix: {
+          last: 13.59, change: -1.19, percentChange: -8.03, open: 14.78, high: 14.78,
+          low: 13.52, previousClose: 14.78, timestamp: recentNseTimestamp(),
+        },
+        fiiDii: { value: [
+          { category: 'DII', date: '06-Oct-2026', buyValue: 1, sellValue: 2, netValue: -1 },
+        ] },
+      }),
+    }));
+
+    const result = await new NseMarketDataProvider('http://localhost/api/nse').getPremarketFeeds();
+
+    expect(result.status).toBe('error');
+    expect(result.data?.indiaVix).toMatchObject({ ltp: 13.59 });
+    expect(result.data?.indiaVixStatus).toBe('live');
+    expect(result.data?.fiiDiiStatus).toBe('error');
+    expect(result.data?.fiiDiiError).toContain('missing valid FII/FPI or DII records');
+  });
+
+  it('renders a VIX quote without claiming freshness when NSE omits its source timestamp', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        indiaVix: {
+          symbol: 'INDIA VIX',
+          last: 13.69,
+          variation: 0.08,
+          percentChange: 0.56,
+          open: 13.61,
+          high: 14.32,
+          low: 13.61,
+          previousClose: 13.61,
+        },
+        fiiDiiError: 'NSE provider request failed with HTTP 502.',
+      }),
+    }));
+
+    const result = await new NseMarketDataProvider('http://localhost/api/nse').getPremarketFeeds();
+
+    expect(result.status).toBe('error');
+    expect(result.data?.indiaVix).toMatchObject({ ltp: 13.69, timestamp: null });
+    expect(result.data?.indiaVixStatus).toBe('stale');
+    expect(result.data?.indiaVixError).toContain('freshness cannot be verified');
+    expect(result.data?.fiiDiiStatus).toBe('error');
+    expect(result.data?.fiiDiiError).toContain('HTTP 502');
+  });
+
+  it('does not treat GIFT NIFTY quotes without a source timestamp as live', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ symbol: 'GIFT NIFTY', lastPrice: 25123.5 }] }),
+    }));
+
+    const result = await new NseMarketDataProvider('http://localhost/api/nse').getGiftNifty();
+
+    expect(result.status).toBe('no-data');
+    expect(result.data).toBeNull();
+  });
+
   it('maps the verified NSE futures quote fields and request path', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-08T09:30:00Z'));
     const timestamp = recentNseTimestamp();
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -460,10 +714,11 @@ describe('nse market data helpers', () => {
       ok: true,
       json: async () => ({
         data: [
-          { cmSymbol: 'HDFCBANK', lasttradedPrice: 721.2, change: 12.5, pchange: 1.76,
+          { cmSymbol: 'HDFCBANK', lasttradedPrice: '1,721.20', change: '12.5', pchange: '1.76',
             totaltradedquantity: 373.89857, totaltradedvalue: 2679.058, weightage: 12 },
-          { cmSymbol: 'INFY', lasttradedPrice: 1035, change: 40.84, pchange: 4.11,
+          { cmSymbol: 'INFY', lasttradedPrice: '1,035', change: '40.84', pchange: '4.11',
             totaltradedquantity: 251, totaltradedvalue: 260000, weightage: 3.35 },
+          { cmSymbol: 'HINDUNILVR', lasttradedPrice: '25,12.34', change: '0.1' },
         ],
       }),
     });
@@ -471,16 +726,20 @@ describe('nse market data helpers', () => {
 
     const result = await new NseMarketDataProvider().getConstituents();
 
-    expect(result.status).toBe('live');
+    expect(result.status).toBe('stale');
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/nse/constituents'), expect.any(Object));
-    expect(result.data).toHaveLength(2);
+    expect(result.data).toHaveLength(3);
     expect(result.data?.[0]).toMatchObject({
-      symbol: 'HDFCBANK', ltp: 721.2, previousClose: 708.7, change: 12.5,
+      symbol: 'HDFCBANK', ltp: 1721.2, previousClose: 1708.7, change: 12.5,
       changePercent: 1.76, volume: 373.89857, weight: 10.38, sector: 'Financial Services',
     });
+    expect(result.data?.[1]?.ltp).toBe(1035);
+    expect(result.data?.[2]?.ltp).toBeNull();
   });
 
   it('loads an on-demand equity quote using the NSE priceInfo response', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-08T09:30:00Z'));
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -609,10 +868,13 @@ describe('nse market data helpers', () => {
   });
 
   it('normalizes mocked NSE options and keeps only near-ATM strikes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-08T09:30:00Z'));
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
         records: {
+          timestamp: recentNseTimestamp(),
           data: Array.from({ length: 21 }, (_, index) => {
             const strikePrice = 23000 + index * 50;
             const leg = (side: 'CE' | 'PE') => ({

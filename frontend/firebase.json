@@ -6,7 +6,7 @@
     "indexes": "firestore.indexes.json"
   },
   "hosting": {
-    "public": "public",
+    "public": "dist",
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -20,6 +20,11 @@
     ]
   },
   "auth": {
-    "providers": {}
+    "providers": {
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "miniproject-7893",
+        "supportEmail": "support@miniproject-7893.firebaseapp.com"
+      }
+    }
   }
 }

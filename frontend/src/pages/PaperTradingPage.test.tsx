@@ -129,9 +129,10 @@ describe('PaperTradingPage', () => {
 
     const audit = host.querySelector('details.paper-cycle');
     expect(audit).not.toBeNull();
+    expect(audit?.querySelector('summary')?.textContent).toContain('NIFTY 68/100');
     await act(async () => audit?.querySelector('summary')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    expect(host.textContent).toContain('Signal strength');
-    expect(host.textContent).toContain('68%');
+    expect(host.textContent).toContain('NIFTY signal strength');
+    expect(host.textContent).toContain('68/100');
   });
 
   it('stops automation from the dashboard and reflects persisted status', async () => {

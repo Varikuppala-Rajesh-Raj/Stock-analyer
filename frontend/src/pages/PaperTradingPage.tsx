@@ -353,7 +353,7 @@ export function PaperTradingPage() {
                 <details className="paper-cycle" key={cycle.id}>
                   <summary>
                     <time>{dateTime(cycle.timestamp)}</time>
-                    <b>{cycle.direction ?? 'NO CLEAR EDGE'}</b>
+                    <b>{cycle.direction ?? 'NO CLEAR EDGE'} · NIFTY {cycle.signalStrength == null ? '—' : `${cycle.signalStrength}/100`}</b>
                     <span className={`pill ${cycle.status === 'TRADE_SUBMITTED' ? 'good' : cycle.status === 'ERROR' ? 'sell' : 'neutral'}`}>
                       {cycle.status}
                     </span>
@@ -362,7 +362,7 @@ export function PaperTradingPage() {
                   </summary>
                   <div className="paper-cycle-detail">
                     <Fact label="Signal" value={cycle.direction ?? 'NO TRADE'} />
-                    <Fact label="Signal strength" value={cycle.signalStrength == null ? 'Not recorded' : `${cycle.signalStrength}%`} />
+                    <Fact label="NIFTY signal strength" value={cycle.signalStrength == null ? 'Not recorded' : `${cycle.signalStrength}/100`} />
                     <Fact label="Selected contract" value={cycle.optionType ? `${cycle.optionType} ${cycle.strike ?? ''} · ${cycle.expiry ?? 'expiry not recorded'}` : 'None'} />
                     <Fact label="Decision reason" value={cycle.reason || 'Not recorded'} />
                     <Fact label="Paper order" value={order ? `${order.side} ${order.quantity} · ${order.status}` : cycle.paperOrderId ?? 'No order created'} />

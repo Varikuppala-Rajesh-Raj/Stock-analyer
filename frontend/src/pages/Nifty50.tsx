@@ -3,9 +3,11 @@ import { NIFTY50_MEMBERS, NIFTY50_SECTORS, NIFTY50_WEIGHT_AS_OF, NIFTY50_WEIGHTS
 import {
   computeWeightedAttribution,
   computeNiftyPressure,
+  computeNiftyIndexWindowReturns,
   computeMarketDirection,
   nseMarketDataProvider,
   type ConstituentItem,
+  type NiftyIndexCandle,
   type MarketDataBundle,
   type MarketDirectionAnalysis,
   type NiftyPressureResult,
@@ -72,6 +74,9 @@ export function Nifty50() {
   const [recommendation, setRecommendation] = useState<NiftyTradeRecommendation | null>(null);
   const [recommendationError, setRecommendationError] = useState('');
   const [recommendationLoading, setRecommendationLoading] = useState(true);
+  const [niftyIndexCandles, setNiftyIndexCandles] = useState<NiftyIndexCandle[]>([]);
+  const [niftyIndexHistorySource, setNiftyIndexHistorySource] = useState<'NSE' | 'UPSTOX' | null>(null);
+  const [niftyIndexHistoryError, setNiftyIndexHistoryError] = useState('');
   const pressureHistory = useRef<NiftyPressureSample[]>([]);
 
   useEffect(() => {
@@ -120,6 +125,40 @@ export function Nifty50() {
       window.clearInterval(timer);
     };
   }, [refreshCount]);
+
+  useEffect(() => {
+    let active = true;
+    let inFlight = false;
+    const loadIndexHistory = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const result = await nseMarketDataProvider.getNiftyIndexCandles();
+        if (active) {
+          setNiftyIndexCandles(result.candles);
+          setNiftyIndexHistorySource(result.source);
+          setNiftyIndexHistoryError('');
+        }
+      } catch (reason) {
+        if (active) {
+          setNiftyIndexCandles([]);
+          setNiftyIndexHistorySource(null);
+          setNiftyIndexHistoryError(reason instanceof Error
+            ? reason.message
+            : 'NIFTY intraday history is unavailable from NSE and Upstox.');
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void loadIndexHistory();
+    const timer = window.setInterval(() => void loadIndexHistory(), 5 * 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -250,6 +289,14 @@ export function Nifty50() {
       <NiftyPressurePanel
         pressure={pressure}
         marketDirection={computeMarketDirection(pressure, marketBundle)}
+        indexReturns={computeNiftyIndexWindowReturns(
+          niftyIndexCandles,
+          nifty?.status === 'live' && nifty.lastUpdated != null && nifty.data
+            ? { timestamp: nifty.lastUpdated, close: nifty.data.ltp }
+            : null
+        )}
+        indexHistorySource={niftyIndexHistorySource}
+        indexHistoryError={niftyIndexHistoryError}
         sampleCount={pressureSampleCount}
         status={quotes.status}
       />
@@ -379,6 +426,10 @@ function NiftyTradeRecommendationPanel({
     : recommendation?.optionType === 'PE'
       ? 'BUY PUT (PE)'
       : 'NO TRADE';
+  const lotUnits = recommendation?.quantity ?? null;
+  const premiumRequired = lotUnits != null && recommendation?.entryPrice != null
+    ? lotUnits * recommendation.entryPrice
+    : null;
 
   return (
     <section className={`nifty50-recommendation ${ready ? directionTone : ''}`} aria-label="Automated trade recommendation">
@@ -387,16 +438,28 @@ function NiftyTradeRecommendationPanel({
         <strong className={ready ? directionTone : ''}>{loading ? 'Checking live conditions…' : error ? 'Unavailable' : action}</strong>
       </div>
       {error ? <p className="nifty50-recommendation-message error">{error}</p> : !ready ? (
-        <p className="nifty50-recommendation-message">
-          {loading ? 'Evaluating current NIFTY, futures, option-chain, and risk conditions.' : recommendation?.reason
-            ? `${readableState(recommendation.reason)} · no trade is recommended unless every live-data and risk check passes.`
-            : 'Waiting for a recommendation.'}
-        </p>
+        <>
+          <p className="nifty50-recommendation-message">
+            {loading ? 'Evaluating current NIFTY, futures, option-chain, and risk conditions.' : recommendation?.reason
+              ? `${readableState(recommendation.reason)} · no trade is recommended unless every live-data and risk check passes.`
+              : 'Waiting for a recommendation.'}
+          </p>
+          <p className="nifty50-recommendation-message">
+            NIFTY technical signal: {recommendation?.technicalSignal ?? 'Not recorded'}
+            {recommendation?.signalStrength == null ? '' : ` · score ${recommendation.signalStrength}/100`}
+          </p>
+          {recommendation?.technicalSignal === 'HOLD' && (
+            <p className="nifty50-recommendation-message">
+              Entry needs a directional BUY or SELL signal at 60/100 or higher; a HOLD score alone does not qualify.
+            </p>
+          )}
+        </>
       ) : (
         <>
           <div className="nifty50-recommendation-metrics">
             <div><span>NIFTY direction</span><strong className={directionTone}>{recommendation.direction}</strong></div>
-            <div><span>Signal strength</span><strong>{recommendation.signalStrength}/100</strong><small>Rule-engine score, not probability</small></div>
+            <div><span>NIFTY technical signal</span><strong>{recommendation.technicalSignal ?? '—'}</strong><small>Directional classification</small></div>
+            <div><span>NIFTY signal score</span><strong>{recommendation.signalStrength}/100</strong><small>Rule-engine score, not probability</small></div>
             <div><span>Expected NIFTY move</span><strong>{recommendation.expectedNiftyMovePoints == null ? '—' : `${recommendation.expectedNiftyMovePoints.toFixed(2)} pts`}</strong></div>
             <div><span>Selected contract</span><strong>{recommendation.strike} {recommendation.optionType}</strong><small>{recommendation.expiry}</small></div>
             <div><span>NIFTY spot</span><strong>{currency(recommendation.spotPrice)}</strong></div>
@@ -404,7 +467,9 @@ function NiftyTradeRecommendationPanel({
             <div><span>Option quote · entry</span><strong>{currency(recommendation.optionPrice)} · {currency(recommendation.entryPrice)}</strong><small>Indicative current paper-entry quote</small></div>
             <div><span>Stop · target</span><strong>{currency(recommendation.stopLoss)} · {currency(recommendation.targetPrice)}</strong></div>
             <div><span>Risk / reward</span><strong>1 : {recommendation.riskReward?.toFixed(2) ?? '—'}</strong></div>
-            <div><span>Quantity</span><strong>{recommendation.quantity ?? '—'}</strong><small>Official exchange quantity</small></div>
+            <div><span>Order size</span><strong>{lotUnits == null ? '—' : `1 lot · ${lotUnits} units`}</strong><small>Official exchange lot size</small></div>
+            <div><span>Premium required</span><strong>{currency(premiumRequired)}</strong><small>Entry premium × units; charges excluded</small></div>
+            <div><span>P&amp;L per ₹1 premium move</span><strong>{lotUnits == null ? '—' : `±${currency(lotUnits)}`}</strong><small>Gross gain/loss before charges</small></div>
           </div>
           <div className="nifty50-recommendation-evidence">
             <strong>Decision evidence</strong>
@@ -422,11 +487,17 @@ function NiftyTradeRecommendationPanel({
 function NiftyPressurePanel({
   pressure,
   marketDirection,
+  indexReturns,
+  indexHistorySource,
+  indexHistoryError,
   sampleCount,
   status,
 }: {
   pressure: NiftyPressureResult | null;
   marketDirection: MarketDirectionAnalysis;
+  indexReturns: Record<5 | 10 | 15 | 30, number | null>;
+  indexHistorySource: 'NSE' | 'UPSTOX' | null;
+  indexHistoryError: string;
   sampleCount: number;
   status: string;
 }) {
@@ -451,20 +522,38 @@ function NiftyPressurePanel({
         <div><span>Down-side pressure</span><strong className="down">{pressure ? signedPressure(-pressure.session.downContributionPercentPoints) : '—'}</strong><small>{pressure ? `${pressure.session.coveredWeightPercent.toFixed(1)}% weight covered · ${pressure.downSharePercent == null ? 'share unavailable' : `${pressure.downSharePercent.toFixed(1)}% gross pressure share, not probability`}` : 'Waiting for constituent quotes'}</small></div>
         <div><span>Observed 15m range · 1σ</span><strong>{range ? `${currency(range.low)} – ${currency(range.high)}` : 'Collecting'}</strong><small>{range ? `±${range.sigmaPercent.toFixed(3)}% from recent NIFTY volatility` : 'Requires at least 5 minutes of fresh NIFTY samples'}</small></div>
       </div>
-      <div className="nifty50-horizons" aria-label="Weighted pressure by horizon">
+      <div className="nifty50-horizons" aria-label="Market pressure and NIFTY index returns by horizon">
         {windows.map(minutes => {
-          const value = pressure?.horizons[minutes];
+          const constituentValue = pressure?.horizons[minutes];
+          const indexReturn = minutes === 1 ? null : indexReturns[minutes];
+          const useIndexReturn = indexReturn != null;
+          const value = useIndexReturn
+            ? {
+              netPressurePercentPoints: indexReturn,
+              upContributionPercentPoints: Math.max(indexReturn, 0),
+              downContributionPercentPoints: Math.max(-indexReturn, 0),
+              coveredWeightPercent: 100,
+            }
+            : constituentValue;
           return <div key={minutes}>
             <span>{minutes}m</span>
-            <strong className={moveClass(value?.netPressurePercentPoints)}>{value ? signedPressure(value.netPressurePercentPoints) : 'Collecting'}</strong>
-            <small>{value ? `↑ ${signedPressure(value.upContributionPercentPoints)} · ↓ ${signedPressure(-value.downContributionPercentPoints)} · ${value.coveredWeightPercent.toFixed(1)}% weight` : 'More samples needed'}</small>
+            <strong className={moveClass(value?.netPressurePercentPoints)}>{value
+              ? useIndexReturn ? signedPercent(indexReturn) : signedPressure(value.netPressurePercentPoints)
+              : 'Collecting'}</strong>
+            <small>{useIndexReturn
+              ? `NIFTY index return · ${indexHistorySource ?? 'intraday candles'}`
+              : value
+                ? `↑ ${signedPressure(value.upContributionPercentPoints)} · ↓ ${signedPressure(-value.downContributionPercentPoints)} · ${value.coveredWeightPercent.toFixed(1)}% constituent weight`
+                : minutes !== 1 && indexHistoryError
+                  ? indexHistoryError
+                  : 'More same-session samples needed'}</small>
           </div>;
         })}
       </div>
       <div className="nifty50-linked-context">
         <div className="nifty50-linked-heading"><small>INTERLINKED MARKET STATE</small><span>Direction first · derivatives as confirmation and structure</span></div>
         <div className="nifty50-linked-metrics">
-          <div><span>Market direction score</span><strong className={directionTone}>{directionScore}</strong><small>{marketDirection.strength} · positive favors up, negative favors down</small></div>
+          <div><span>Market direction score</span><strong className={directionTone}>{directionScore}</strong><small>{marketDirection.strength} · {marketDirection.constituentPressureWindowMinutes === 1 ? '1m pressure fallback; 5m collecting · ' : ''}positive favors up, negative favors down</small></div>
           <div><span>Spot 5m</span><strong className={moveClass(marketDirection.spotReturn5m)}>{signedPercent(marketDirection.spotReturn5m)}</strong><small className={confirmationTone(marketDirection.spotConfirmation)}>Spot {readableState(marketDirection.spotConfirmation)}</small></div>
           <div><span>Futures 5m</span><strong className={moveClass(marketDirection.futuresReturn5m)}>{signedPercent(marketDirection.futuresReturn5m)}</strong><small className={confirmationTone(marketDirection.futuresConfirmation)}>Futures {readableState(marketDirection.futuresConfirmation)}</small></div>
           <div><span>Options structure</span><strong>{marketDirection.nearestStructure === 'UNAVAILABLE' ? 'Unavailable' : `${marketDirection.nearestStructure} · ${currency(marketDirection.nearestStructure === 'SUPPORT' ? marketDirection.supportLevel : marketDirection.resistanceLevel)}`}</strong><small>Support {currency(marketDirection.supportLevel)} · Resistance {currency(marketDirection.resistanceLevel)}</small></div>
@@ -472,7 +561,7 @@ function NiftyPressurePanel({
         </div>
       </div>
       <p className="nifty50-engine-note">
-        Score uses 50% constituent pressure, 25% NIFTY spot momentum, and 25% futures momentum when available; missing feeds are omitted. PCR/OI levels never set direction. Acceleration compares consecutive 5m windows ({signedPressure(pressure?.accelerationPercentPoints)}); aligned windows: {pressure?.persistenceHorizonCount ?? '—'}/5. Scores are not probabilities or contract recommendations. Samples reset on the next NSE market date and are collected while this page is open.
+        Direction score uses 50% constituent pressure, 25% NIFTY spot momentum, and 25% futures momentum when available. The 15m/30m rows use same-day NIFTY index candles (NSE first, Upstox fallback) when available; these are index returns, not constituent-weighted pressure. PCR/OI levels never set direction. Acceleration compares consecutive 5m constituent windows ({signedPressure(pressure?.accelerationPercentPoints)}); aligned constituent windows: {pressure?.persistenceHorizonCount ?? '—'}/5. Scores are not probabilities or contract recommendations. Browser constituent samples reset on the next NSE market date and are collected while this page is open.
       </p>
     </section>
   );

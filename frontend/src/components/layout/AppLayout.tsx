@@ -1,6 +1,7 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { getNseMarketSession, getNseMarketSessionLabel } from '../../utils/marketSession';
+import './AppLayout.css';
 
 export function AppLayout() {
   const navigate = useNavigate();
@@ -25,6 +26,7 @@ export function AppLayout() {
   const navItems: NavItem[] = [
     { path: '/nifty', label: 'NIFTY', icon: '⌂' },
     { path: '/nifty-50', label: 'NIFTY 50', icon: '▦' },
+    { path: '/nifty-premarket', label: 'NIFTY pre-market', icon: '◷', isNew: true },
     { path: '/markets', label: 'Markets', icon: '⌁' },
     { path: '/watchlist', label: 'Watchlist', icon: '☆' },
     { path: '/strategies', label: 'Strategies', icon: '◈' },
@@ -40,13 +42,13 @@ export function AppLayout() {
 
   return (
     <div className="app">
-      <aside>
+      <aside className="app-sidebar">
         <div className="brand">
           <i>⌁</i>
           <b>nexus</b>
           <small>TRADE INTELLIGENCE</small>
         </div>
-        <nav>
+        <nav className="sidebar-nav" aria-label="Main navigation">
           {navItems.map((item) => (
             <button
               key={item.path}

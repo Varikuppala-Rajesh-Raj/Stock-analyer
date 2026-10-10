@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "firebase": "^12.17.1",
+    "firebase": "^12.19.0",
     "lightweight-charts": "^5.2.1",
     "react": "latest",
     "react-dom": "latest",

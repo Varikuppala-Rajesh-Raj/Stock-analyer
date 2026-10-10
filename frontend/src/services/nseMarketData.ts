@@ -3,7 +3,7 @@ import { NIFTY50_SECTORS, NIFTY50_WEIGHTS } from '../data/nifty50';
 export const DEFAULT_POLL_INTERVAL = 30_000;
 export const DEFAULT_STALE_MS = 180_000;
 
-export type ProviderStatus = 'live' | 'stale' | 'error' | 'loading' | 'no-data';
+export type ProviderStatus = 'live' | 'collected' | 'report-collected' | 'stale' | 'error' | 'loading' | 'no-data';
 
 export type ProviderState<T> = {
   status: ProviderStatus;
@@ -25,6 +25,15 @@ export type NiftyMarketData = {
   volume: number | null;
   timestamp: string;
   source: 'NSE';
+};
+
+export type GiftNiftySnapshot = {
+  symbol: string;
+  ltp: number;
+  previousClose: number | null;
+  change: number | null;
+  changePercent: number | null;
+  timestamp: string;
 };
 
 export type ConstituentItem = {
@@ -68,6 +77,17 @@ export type NiftyPressureSample = {
   constituents: Array<Pick<ConstituentItem, 'symbol' | 'ltp' | 'open' | 'weight'>>;
 };
 
+export type NiftyIndexCandle = {
+  timestamp: number;
+  close: number;
+};
+
+export type NiftyIndexWindowReturns = Record<5 | 10 | 15 | 30, number | null>;
+
+const nseMarketDate = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
 export type NiftyPressureInterval = {
   upContributionPercentPoints: number;
   downContributionPercentPoints: number;
@@ -91,6 +111,7 @@ export type MarketDirectionAnalysis = {
   direction: 'UP' | 'DOWN' | 'NEUTRAL' | 'COLLECTING';
   score: number | null;
   strength: 'WEAK' | 'MODERATE' | 'STRONG' | 'COLLECTING';
+  constituentPressureWindowMinutes: 1 | 5 | null;
   state: string;
   spotConfirmation: 'CONFIRMS' | 'CONTRADICTS' | 'NEUTRAL' | 'STALE' | 'UNAVAILABLE' | 'COLLECTING';
   futuresConfirmation: 'CONFIRMS' | 'CONTRADICTS' | 'NEUTRAL' | 'STALE' | 'UNAVAILABLE' | 'COLLECTING';
@@ -154,7 +175,11 @@ export type OptionsSnapshot = {
 };
 
 export type MomentumClassification = 'STRONG_UP' | 'UP' | 'NEUTRAL' | 'DOWN' | 'STRONG_DOWN';
-export type MomentumAvailability = 'COLLECTING' | 'AVAILABLE' | 'UNAVAILABLE';
+export type MomentumAvailability = 'COLLECTING' | 'AVAILABLE' | 'COLLECTED' | 'UNAVAILABLE';
+
+function metricUsable(status: MomentumAvailability | 'STALE'): boolean {
+  return status === 'AVAILABLE' || status === 'COLLECTED';
+}
 export type FuturesPositioning = 'LONG_BUILDUP' | 'SHORT_BUILDUP' | 'SHORT_COVERING' | 'LONG_UNWINDING' | 'NEUTRAL';
 
 export type FeatureThresholds = {
@@ -185,7 +210,7 @@ export type IndiaVixSnapshot = {
   high: number;
   low: number;
   previousClose: number;
-  timestamp: string;
+  timestamp: string | null;
 };
 
 export type MarketStatistics = {
@@ -193,8 +218,46 @@ export type MarketStatistics = {
   declines: number;
   unchanged: number;
   volume: number;
-  turnover: number;
+  turnover: number | null;
   timestamp: string;
+};
+
+export function computeConstituentMarketStatistics(
+  constituents: ConstituentItem[],
+  timestamp: string,
+): MarketStatistics | null {
+  const changes = constituents
+    .map(({ changePercent }) => changePercent)
+    .filter((changePercent): changePercent is number =>
+      changePercent != null && Number.isFinite(changePercent));
+  if (!changes.length) return null;
+
+  return {
+    advances: changes.filter((changePercent) => changePercent > 0).length,
+    declines: changes.filter((changePercent) => changePercent < 0).length,
+    unchanged: changes.filter((changePercent) => changePercent === 0).length,
+    volume: constituents.reduce((total, item) => total + (item.volume ?? 0), 0),
+    turnover: null,
+    timestamp,
+  };
+}
+
+export type FiiDiiFlow = {
+  category: 'FII/FPI' | 'DII';
+  date: string | null;
+  buyValue: number;
+  sellValue: number;
+  netValue: number;
+};
+
+export type NsePremarketFeeds = {
+  retrievedAt: number;
+  indiaVix: IndiaVixSnapshot | null;
+  indiaVixStatus: ProviderStatus;
+  indiaVixError: string | null;
+  fiiDii: FiiDiiFlow[];
+  fiiDiiStatus: ProviderStatus;
+  fiiDiiError: string | null;
 };
 
 export type SectorReturn = {
@@ -283,6 +346,7 @@ export type MarketDataBundle = {
   optionExpiries: ProviderState<string[]>;
   selectedOptionExpiry: string | null;
   features: MarketFeatureSnapshot | null;
+  premarket?: ProviderState<NsePremarketFeeds>;
 };
 
 export type BackendMetric = {
@@ -495,6 +559,44 @@ function findPressureSample(samples: NiftyPressureSample[], target: number): Nif
   return null;
 }
 
+export function computeNiftyIndexWindowReturns(
+  candles: NiftyIndexCandle[],
+  current: NiftyIndexCandle | null,
+  now = Date.now()
+): NiftyIndexWindowReturns {
+  const currentDate = nseMarketDate.format(now);
+  const validCandles = candles.filter(candle => Number.isFinite(candle.timestamp)
+    && Number.isFinite(candle.close) && candle.close > 0
+    && nseMarketDate.format(candle.timestamp) === currentDate);
+  if (current && Number.isFinite(current.timestamp) && Number.isFinite(current.close)
+      && current.close > 0 && nseMarketDate.format(current.timestamp) === currentDate) {
+    validCandles.push(current);
+  }
+  const ordered = [...new Map(validCandles
+    .map(candle => [candle.timestamp, candle] as const)).values()]
+    .sort((left, right) => left.timestamp - right.timestamp);
+  const latest = ordered.at(-1);
+  if (!latest || now - latest.timestamp > 3 * 60_000 || latest.timestamp > now + 60_000) {
+    return { 5: null, 10: null, 15: null, 30: null };
+  }
+
+  const returns = {} as NiftyIndexWindowReturns;
+  for (const minutes of [5, 10, 15, 30] as const) {
+    const target = latest.timestamp - minutes * 60_000;
+    let previous: NiftyIndexCandle | undefined;
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+      if (ordered[index].timestamp <= target) {
+        previous = ordered[index];
+        break;
+      }
+    }
+    returns[minutes] = previous && target - previous.timestamp <= 90_000
+      ? (latest.close - previous.close) / previous.close * 100
+      : null;
+  }
+  return returns;
+}
+
 function sessionPressure(sample: NiftyPressureSample): NiftyPressureInterval {
   let upContributionPercentPoints = 0;
   let downContributionPercentPoints = 0;
@@ -625,20 +727,28 @@ export function computeMarketDirection(
 ): MarketDirectionAnalysis {
   const features = bundle?.features;
   const fiveMinutePressure = pressure?.horizons[5];
-  const pressureAvailable = fiveMinutePressure != null
+  const oneMinutePressure = pressure?.horizons[1];
+  const fiveMinutePressureAvailable = fiveMinutePressure != null
     && fiveMinutePressure.coveredWeightPercent >= PRESSURE_MIN_COVERAGE_PERCENT;
+  const oneMinutePressureAvailable = oneMinutePressure != null
+    && oneMinutePressure.coveredWeightPercent >= PRESSURE_MIN_COVERAGE_PERCENT;
+  const constituentPressure = fiveMinutePressureAvailable
+    ? fiveMinutePressure
+    : oneMinutePressureAvailable ? oneMinutePressure : null;
+  const constituentPressureWindowMinutes = fiveMinutePressureAvailable ? 5
+    : oneMinutePressureAvailable ? 1 : null;
   const components: Array<{ weight: number; signal: number }> = [];
 
-  if (pressureAvailable && fiveMinutePressure) {
-    const gross = fiveMinutePressure.upContributionPercentPoints + fiveMinutePressure.downContributionPercentPoints;
+  if (constituentPressure) {
+    const gross = constituentPressure.upContributionPercentPoints + constituentPressure.downContributionPercentPoints;
     components.push({
       weight: 50,
-      signal: gross > 0 ? fiveMinutePressure.netPressurePercentPoints / gross : 0,
+      signal: gross > 0 ? constituentPressure.netPressurePercentPoints / gross : 0,
     });
   }
 
   const momentumSignal = (value: number | null | undefined, status: string | undefined): number | null => {
-    if (value == null || status !== 'AVAILABLE') return null;
+    if (value == null || (status !== 'AVAILABLE' && status !== 'COLLECTED')) return null;
     const classification = classifyMomentum(value);
     if (classification === 'STRONG_UP') return 1;
     if (classification === 'UP') return 0.5;
@@ -653,7 +763,7 @@ export function computeMarketDirection(
   if (futuresSignal != null) components.push({ weight: 25, signal: futuresSignal });
 
   const totalWeight = components.reduce((sum, component) => sum + component.weight, 0);
-  const score = pressureAvailable && totalWeight > 0
+  const score = constituentPressure && totalWeight > 0
     ? components.reduce((sum, component) => sum + component.weight * component.signal, 0) / totalWeight * 100
     : null;
   const direction = score == null
@@ -707,6 +817,7 @@ export function computeMarketDirection(
     direction,
     score,
     strength,
+    constituentPressureWindowMinutes,
     state,
     spotConfirmation: confirmation(spotSignal, spotStatus),
     futuresConfirmation: confirmation(futuresSignal, futuresStatus),
@@ -832,10 +943,59 @@ export function isMarketDataStale(lastUpdated: number | null, staleThresholdMs =
   return Date.now() - lastUpdated > staleThresholdMs;
 }
 
+function nseSessionStatus(
+  timestampMs: number | null,
+  sessionOpenMinute = 9 * 60 + 15,
+  sessionCloseMinute = 15 * 60 + 30,
+): ProviderStatus {
+  if (timestampMs == null || !Number.isFinite(timestampMs)) return 'stale';
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+  const parts = (date: Date) => Object.fromEntries(
+    formatter.formatToParts(date).map(({ type, value }) => [type, value]),
+  );
+  const source = parts(new Date(timestampMs));
+  const current = parts(new Date());
+  const sourceDay = Date.UTC(Number(source.year), Number(source.month) - 1, Number(source.day));
+  const currentDay = Date.UTC(Number(current.year), Number(current.month) - 1, Number(current.day));
+  const sourceWeekday = new Date(sourceDay).getUTCDay();
+  const currentWeekday = new Date(currentDay).getUTCDay();
+  const sourceMinute = Number(source.hour) * 60 + Number(source.minute);
+  const currentMinute = Number(current.hour) * 60 + Number(current.minute);
+  const sourceInSession = sourceWeekday > 0 && sourceWeekday < 6
+    && sourceMinute >= sessionOpenMinute && sourceMinute <= sessionCloseMinute;
+  const currentSessionOpen = currentWeekday > 0 && currentWeekday < 6
+    && currentMinute >= sessionOpenMinute && currentMinute < sessionCloseMinute;
+  if (!sourceInSession || timestampMs > Date.now()) return 'stale';
+  if (currentSessionOpen) {
+    return sourceDay === currentDay && Date.now() - timestampMs <= DEFAULT_STALE_MS ? 'live' : 'stale';
+  }
+  return Date.now() - timestampMs <= 7 * 24 * 60 * 60_000 ? 'collected' : 'stale';
+}
+
+function flowReportStatus(flows: FiiDiiFlow[]): ProviderStatus {
+  const today = Date.now();
+  const reportDates = flows.map((flow) => flow.date ? parseNseExpiry(flow.date) : null);
+  if (reportDates.some((date) => date == null || date > today || today - date > 7 * 24 * 60 * 60_000)) {
+    return 'stale';
+  }
+  return 'report-collected';
+}
+
 function providerStatus(status: string | undefined): ProviderStatus {
-  if (status === 'AVAILABLE') return 'live';
+  if (status === 'AVAILABLE' || status === 'LIVE') return 'live';
+  if (status === 'COLLECTED') return 'collected';
+  if (status === 'REPORT_COLLECTED') return 'report-collected';
   if (status === 'STALE') return 'stale';
-  if (status === 'UNAVAILABLE') return 'error';
+  if (status === 'UNAVAILABLE' || status === 'ERROR') return 'error';
   return 'loading';
 }
 
@@ -911,7 +1071,7 @@ export function buildBackendFeatureSnapshot(input: MarketDataBundle, context: Ba
     niftyReturn15m: spot15m.value,
     niftyOvernightReturn: nifty.overnightReturn ?? null,
     niftyOpeningGap: nifty.openingGap ?? null,
-    niftyMomentum: spot15m.status === 'AVAILABLE' && spot15m.value != null
+    niftyMomentum: metricUsable(spot15m.status) && spot15m.value != null
       ? classifyMomentum(spot15m.value) : null,
     niftyMomentumStatus: spot15m.status,
     niftyReturn1mStatus: spot1m.status,
@@ -927,7 +1087,7 @@ export function buildBackendFeatureSnapshot(input: MarketDataBundle, context: Ba
     futuresReturn5m: future5m?.value ?? null,
     futuresReturn10m: future10m?.value ?? null,
     futuresReturn15m: future15m?.value ?? null,
-    futuresMomentum: future15m?.status === 'AVAILABLE' && future15m.value != null
+    futuresMomentum: future15m != null && metricUsable(future15m.status) && future15m.value != null
       ? classifyMomentum(future15m.value) : null,
     futuresMomentumStatus: future15m?.status ?? 'UNAVAILABLE',
     futuresReturn5mStatus: future5m?.status ?? 'UNAVAILABLE',
@@ -943,7 +1103,7 @@ export function buildBackendFeatureSnapshot(input: MarketDataBundle, context: Ba
     futuresBasisPct: futures?.underlyingValue ? (futures.basis / futures.underlyingValue) * 100 : null,
     futuresBasisChange15m: null,
     spotReturn15m: spot15m.value,
-    futuresLead: context.futuresLead.status === 'AVAILABLE' ? context.futuresLead.value : null,
+    futuresLead: metricUsable(context.futuresLead.status) ? context.futuresLead.value : null,
     futuresLeadStatus: context.futuresLead.status,
     futuresOI: futures?.openInterest ?? null,
     futuresOIChangePct: futures?.percentChangeInOpenInterest ?? null,
@@ -973,13 +1133,18 @@ export function buildBackendFeatureSnapshot(input: MarketDataBundle, context: Ba
 }
 
 const asNumber = (value: unknown, fallback = 0): number => {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : fallback;
+  return asOptionalNumber(value) ?? fallback;
 };
+
+const GROUPED_NUMBER = /^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
 
 const asOptionalNumber = (value: unknown): number | null => {
   if (value == null || value === '') return null;
-  const num = Number(value);
+  const text = typeof value === 'string' ? value.trim() : value;
+  if (text === '') return null;
+  if (typeof text === 'string' && text.includes(',') && !GROUPED_NUMBER.test(text)) return null;
+  const normalized = typeof text === 'string' ? text.replaceAll(',', '') : text;
+  const num = Number(normalized);
   return Number.isFinite(num) ? num : null;
 };
 
@@ -992,11 +1157,17 @@ const NSE_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep
 
 function parseNseTimestamp(value: unknown): number | null {
   if (typeof value !== 'string') return null;
-  const match = /^(\d{2})-([A-Za-z]{3})-(\d{4}) (\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
+  const match = /^(\d{2})-([A-Za-z]{3})-(\d{4}) (\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i.exec(value.trim());
   if (!match) return null;
   const month = NSE_MONTHS.findIndex((name) => name.toLowerCase() === match[2].toLowerCase());
   if (month < 0) return null;
-  return Date.UTC(Number(match[3]), month, Number(match[1]), Number(match[4]), Number(match[5]), Number(match[6] ?? 0)) - 330 * 60_000;
+  let hour = Number(match[4]);
+  if (match[7]) {
+    if (hour < 1 || hour > 12) return null;
+    hour = hour % 12 + (match[7].toUpperCase() === 'PM' ? 12 : 0);
+  }
+  if (hour > 23) return null;
+  return Date.UTC(Number(match[3]), month, Number(match[1]), hour, Number(match[5]), Number(match[6] ?? 0)) - 330 * 60_000;
 }
 
 export function parseNseExpiry(value: string): number | null {
@@ -1067,6 +1238,25 @@ function findConstituentRows(source: unknown, depth = 0): NseConstituentRow[] | 
   return null;
 }
 
+function findGiftNiftyQuoteRecords(source: unknown, depth = 0): NseConstituentRow[] {
+  if (depth > 6 || source == null || typeof source !== 'object') return [];
+  if (Array.isArray(source)) {
+    const rows = source.filter(isRecord);
+    if (rows.length) return rows;
+    return source.flatMap((value) => findGiftNiftyQuoteRecords(value, depth + 1));
+  }
+
+  const record = source as NseConstituentRow;
+  const preferredKeys = ['data', 'result', 'giftNifty', 'gift_nifty', 'quote'];
+  for (const key of preferredKeys) {
+    if (key in record) {
+      const nested = findGiftNiftyQuoteRecords(record[key], depth + 1);
+      if (nested.length) return nested;
+    }
+  }
+  return Object.values(record).flatMap((value) => findGiftNiftyQuoteRecords(value, depth + 1));
+}
+
 function firstNumber(row: NseConstituentRow, keys: string[]): number | null {
   for (const key of keys) {
     const value = asOptionalNumber(row[key]);
@@ -1123,8 +1313,169 @@ async function fetchNseJson<T>(url: string): Promise<T> {
   } as T;
 }
 
+function marketDate(timestamp: number): string {
+  return nseMarketDate.format(timestamp);
+}
+
+function candleTimestamp(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 1_000_000_000_000 ? value * 1_000 : value;
+  }
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric < 1_000_000_000_000 ? numeric * 1_000 : numeric;
+  const text = value.trim();
+  const nseIsoTimestamp = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text);
+  if (nseIsoTimestamp) {
+    return Date.UTC(
+      Number(nseIsoTimestamp[1]),
+      Number(nseIsoTimestamp[2]) - 1,
+      Number(nseIsoTimestamp[3]),
+      Number(nseIsoTimestamp[4]),
+      Number(nseIsoTimestamp[5]),
+      Number(nseIsoTimestamp[6] ?? 0)
+    ) - 330 * 60_000;
+  }
+  return parseNseTimestamp(text) ?? (Number.isFinite(Date.parse(text)) ? Date.parse(text) : null);
+}
+
+export function parseNiftyIndexCandles(payload: unknown, now = Date.now()): NiftyIndexCandle[] {
+  const root = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null;
+  const nested = root?.data && typeof root.data === 'object' && !Array.isArray(root.data)
+    ? root.data as Record<string, unknown>
+    : null;
+  const rows = Array.isArray(payload) ? payload
+    : [root?.grapthData, root?.graphData, root?.candles, root?.data,
+      nested?.grapthData, nested?.graphData, nested?.candles]
+      .find(Array.isArray) as unknown[] | undefined;
+  if (!rows) return [];
+
+  const currentDate = marketDate(now);
+  const candles = rows.flatMap(row => {
+    let timestampValue: unknown;
+    let closeValue: unknown;
+    if (Array.isArray(row)) {
+      timestampValue = row[0];
+      closeValue = row.length >= 5 ? row[4] : row[1];
+    } else if (row && typeof row === 'object') {
+      const candle = row as Record<string, unknown>;
+      timestampValue = candle.timestamp ?? candle.time ?? candle.ts ?? candle.date;
+      closeValue = candle.close ?? candle.lastPrice ?? candle.price ?? candle.value;
+    }
+    const timestamp = candleTimestamp(timestampValue);
+    const close = asOptionalNumber(closeValue);
+    return timestamp != null && close != null && close > 0
+        && marketDate(timestamp) === currentDate && timestamp <= now + 60_000
+      ? [{ timestamp, close }]
+      : [];
+  });
+  return [...new Map(candles.map(candle => [candle.timestamp, candle] as const)).values()]
+    .sort((left, right) => left.timestamp - right.timestamp);
+}
+
 export class NseMarketDataProvider {
-  constructor(private readonly baseUrl = `${import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api'}/nse`) {}
+  constructor(
+    private readonly baseUrl = `${import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api'}/nse`,
+    private readonly marketBaseUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api'
+  ) {}
+
+  async getGiftNifty(): Promise<ProviderState<GiftNiftySnapshot>> {
+    const startedAt = Date.now();
+    try {
+      const payload = await fetchNseJson<unknown>(`${this.baseUrl}/gift-nifty`);
+      const records = findGiftNiftyQuoteRecords(payload);
+      const row = records.find((item) => {
+        const symbol = String(item.symbol ?? item.index ?? item.indexName ?? item.name ?? '').toUpperCase();
+        return symbol.includes('GIFT') && firstNumber(item, ['lastPrice', 'lastprice', 'ltp', 'price', 'last', 'value']) != null;
+      }) ?? records.find((item) =>
+        firstNumber(item, ['lastPrice', 'lastprice', 'ltp', 'price', 'last', 'value']) != null);
+
+      if (!row) {
+        return {
+          status: 'no-data', lastUpdated: null, latency: Date.now() - startedAt,
+          error: 'NSE GIFT NIFTY response contained no recognizable quote.', data: null,
+        };
+      }
+
+      const ltp = firstNumber(row, ['lastPrice', 'lastprice', 'ltp', 'price', 'last', 'value']);
+      const previousClose = firstNumber(row, ['previousClose', 'prevClose', 'previousclose', 'close', 'prevDayClose']);
+      const change = firstNumber(row, ['change', 'netChange'])
+        ?? (ltp != null && previousClose != null ? ltp - previousClose : null);
+      const changePercent = firstNumber(row, ['percentChange', 'changePercent', 'perChange', 'pchange'])
+        ?? (change != null && previousClose ? change / previousClose * 100 : null);
+      const rawTimestamp = row.timestamp ?? row.lastUpdateTime ?? row.time ?? row.updatedAt
+        ?? getNestedValue<unknown>(payload, ['timestamp'])
+        ?? getNestedValue<unknown>(payload, ['lastUpdateTime']);
+      const timestamp = typeof rawTimestamp === 'string' ? rawTimestamp : '';
+      const updatedAt = parseNseTimestamp(rawTimestamp) ?? (
+        typeof rawTimestamp === 'string' ? Date.parse(rawTimestamp) : Number.NaN
+      );
+
+      if (ltp == null || ltp <= 0 || !Number.isFinite(updatedAt)) {
+        return {
+          status: 'no-data', lastUpdated: null, latency: Date.now() - startedAt,
+          error: 'NSE GIFT NIFTY quote is missing a valid price or source timestamp.', data: null,
+        };
+      }
+
+      const data: GiftNiftySnapshot = {
+        symbol: 'GIFT NIFTY',
+        ltp,
+        previousClose,
+        change,
+        changePercent,
+        timestamp,
+      };
+      return {
+        status: nseSessionStatus(updatedAt, 6 * 60 + 30, 15 * 60 + 40),
+        lastUpdated: updatedAt,
+        latency: Date.now() - startedAt,
+        error: null,
+        data,
+      };
+    } catch (error) {
+      return {
+        status: 'error', lastUpdated: null, latency: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : 'NSE request failed for GIFT NIFTY.',
+        data: null,
+      };
+    }
+  }
+
+  async getNiftyIndexCandles(): Promise<{ candles: NiftyIndexCandle[]; source: 'NSE' | 'UPSTOX' }> {
+    let nseFailure: string;
+    try {
+      const payload = await fetchNseJson<unknown>(`${this.baseUrl}/index-candles`);
+      const candles = parseNiftyIndexCandles(payload);
+      const latest = candles.at(-1);
+      if (!latest || Date.now() - latest.timestamp > 3 * 60_000) {
+        throw new Error('NSE returned no fresh NIFTY intraday index history for today.');
+      }
+      return { candles, source: 'NSE' };
+    } catch (reason) {
+      nseFailure = reason instanceof Error ? reason.message : 'NSE index history request failed.';
+    }
+
+    try {
+      const response = await fetch(`${this.marketBaseUrl}/market/nifty-index-intraday`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error(`Upstox fallback failed: ${response.status} ${response.statusText}`);
+      }
+      const candles = parseNiftyIndexCandles(await response.json());
+      const latest = candles.at(-1);
+      if (!latest || Date.now() - latest.timestamp > 3 * 60_000) {
+        throw new Error('Upstox returned no fresh NIFTY intraday candles for today.');
+      }
+      return { candles, source: 'UPSTOX' };
+    } catch (reason) {
+      const upstoxFailure = reason instanceof Error ? reason.message : 'Upstox index history request failed.';
+      throw new Error(`NSE index history unavailable (${nseFailure}); Upstox fallback unavailable (${upstoxFailure}).`);
+    }
+  }
 
   async getNifty(): Promise<ProviderState<NiftyMarketData>> {
     try {
@@ -1161,7 +1512,7 @@ export class NseMarketDataProvider {
       };
 
       return {
-        status: isMarketDataStale(sourceUpdatedAt) ? 'stale' : 'live',
+        status: nseSessionStatus(sourceUpdatedAt),
         lastUpdated: sourceUpdatedAt,
         latency: Date.now() - startedAt,
         error: null,
@@ -1207,11 +1558,11 @@ export class NseMarketDataProvider {
       }
 
       const timestamp = envelope.lastUpdateTime ?? metadata.lastUpdateTime ?? metadata.timestamp
-        ?? priceInfo.lastUpdateTime ?? data.timestamp;
+        ?? priceInfo.lastUpdateTime ?? data.lastUpdateTime ?? data.timestamp;
       const updatedAt = parseNseTimestamp(timestamp);
       return {
-        status: updatedAt != null && isMarketDataStale(updatedAt) ? 'stale' : 'live',
-        lastUpdated: updatedAt ?? Date.now(),
+        status: updatedAt == null ? 'stale' : nseSessionStatus(updatedAt),
+        lastUpdated: updatedAt,
         latency: Date.now() - startedAt,
         error: null,
         data: item,
@@ -1244,8 +1595,8 @@ export class NseMarketDataProvider {
         ?? getNestedValue<unknown>(payload, ['data', 'timestamp']);
       const updatedAt = parseNseTimestamp(timestamp);
       return {
-        status: updatedAt != null && isMarketDataStale(updatedAt) ? 'stale' : 'live',
-        lastUpdated: updatedAt ?? Date.now(),
+        status: updatedAt == null ? 'stale' : nseSessionStatus(updatedAt),
+        lastUpdated: updatedAt,
         latency: Date.now() - startedAt,
         error: constituents.length < 50
           ? `NSE returned ${constituents.length} of 50 recognizable constituents.`
@@ -1306,7 +1657,7 @@ export class NseMarketDataProvider {
       };
 
       return {
-        status: isMarketDataStale(updatedAt) ? 'stale' : 'live',
+        status: nseSessionStatus(updatedAt),
         lastUpdated: updatedAt,
         latency: Date.now() - startedAt,
         error: null,
@@ -1327,7 +1678,9 @@ export class NseMarketDataProvider {
       const sourceStatuses = [data.nifty?.status, data.futures?.status];
       const status: ProviderStatus = sourceStatuses.includes('AVAILABLE')
         ? 'live'
-        : sourceStatuses.includes('STALE')
+        : sourceStatuses.includes('COLLECTED')
+          ? 'collected'
+          : sourceStatuses.includes('STALE')
           ? 'stale'
           : sourceStatuses.includes('UNAVAILABLE')
             ? 'error'
@@ -1397,11 +1750,17 @@ export class NseMarketDataProvider {
       const firstPut = firstRecord?.PE as Record<string, unknown> | undefined;
       const underlying = asNumber(firstRecord?.underlyingValue ?? firstCall?.underlyingValue ?? firstPut?.underlyingValue);
       const nearAtm = underlying > 0 ? selectAtmOptions(data, underlying) : data;
+      const sourceTimestamp = getNestedValue<unknown>(payload, ['records', 'timestamp'])
+        ?? getNestedValue<unknown>(payload, ['timestamp']);
+      const sourceUpdatedAt = parseNseTimestamp(sourceTimestamp);
       return {
-        status: nearAtm.length ? 'live' : 'no-data',
-        lastUpdated: Date.now(),
+        status: !nearAtm.length ? 'no-data'
+          : sourceUpdatedAt == null ? 'stale' : nseSessionStatus(sourceUpdatedAt),
+        lastUpdated: sourceUpdatedAt,
         latency: Date.now() - startedAt,
-        error: null,
+        error: sourceUpdatedAt == null && nearAtm.length
+          ? 'NSE option-chain response did not include a valid source timestamp; freshness cannot be verified.'
+          : null,
         data: nearAtm,
       };
     } catch (error) {
@@ -1454,40 +1813,22 @@ export class NseMarketDataProvider {
     }
   }
 
-  async getMarketStatistics(): Promise<ProviderState<MarketStatistics>> {
-    try {
-      const startedAt = Date.now();
-      const payload = await fetchNseJson<unknown>(`${this.baseUrl}/index-data?type=All`);
-      const rows = Array.isArray(payload) ? payload : getNestedValue<unknown[]>(payload, ['data']) ?? [];
-      const breadth = Array.isArray(rows)
-        ? (rows as Array<Record<string, unknown>>).find((item) => String(item.symbol ?? item.index ?? '').toUpperCase().includes('NIFTY'))
-        : null;
-
-      const data: MarketStatistics = {
-        advances: asNumber((breadth as Record<string, unknown>)?.advances),
-        declines: asNumber((breadth as Record<string, unknown>)?.declines),
-        unchanged: asNumber((breadth as Record<string, unknown>)?.unchanged),
-        volume: asNumber((breadth as Record<string, unknown>)?.totalVolume ?? (breadth as Record<string, unknown>)?.volume),
-        turnover: asNumber((breadth as Record<string, unknown>)?.turnover),
-        timestamp: parseTimestamp((breadth as Record<string, unknown>)?.timestamp ?? new Date().toISOString()),
-      };
-
-      return {
-        status: data.advances || data.declines || data.volume ? 'live' : 'no-data',
-        lastUpdated: Date.now(),
-        latency: Date.now() - startedAt,
-        error: null,
-        data,
-      };
-    } catch (error) {
-      return {
-        status: 'error',
-        lastUpdated: null,
-        latency: null,
-        error: error instanceof Error ? error.message : 'NSE request failed for market statistics.',
-        data: null,
-      };
-    }
+  private getMarketStatistics(
+    constituents: ProviderState<ConstituentItem[]>,
+  ): ProviderState<MarketStatistics> {
+    const timestamp = constituents.lastUpdated == null
+      ? null : new Date(constituents.lastUpdated).toISOString();
+    const data = constituents.data && timestamp
+      ? computeConstituentMarketStatistics(constituents.data, timestamp)
+      : null;
+    return {
+      status: !data ? constituents.status === 'error' ? 'error' : 'no-data' : constituents.status,
+      lastUpdated: constituents.lastUpdated,
+      latency: constituents.latency,
+      error: data ? constituents.error : constituents.error
+        ?? 'NSE constituent quotes did not contain usable percentage changes.',
+      data,
+    };
   }
 
   async getIndices(): Promise<ProviderState<Record<string, number>>> {
@@ -1521,15 +1862,167 @@ export class NseMarketDataProvider {
     }
   }
 
-  async refreshAll(): Promise<MarketDataBundle> {
-    const [marketContext, constituents, optionExpiries, indiaVix, marketStatistics, indices] = await Promise.all([
+  async getPremarketFeeds(): Promise<ProviderState<NsePremarketFeeds>> {
+    const startedAt = Date.now();
+    try {
+      const payload = await fetchNseJson<unknown>(`${this.baseUrl}/premarket`);
+      if (!payload || typeof payload !== 'object') {
+        throw new Error('NSE premarket response was not an object.');
+      }
+      const envelope = payload as Record<string, unknown>;
+      const retrievedAt = Date.now();
+      const suppliedVixError = typeof envelope.indiaVixError === 'string' ? envelope.indiaVixError : null;
+      const suppliedFiiDiiError = typeof envelope.fiiDiiError === 'string' ? envelope.fiiDiiError : null;
+      const suppliedVixStatus = typeof envelope.indiaVixStatus === 'string'
+        ? providerStatus(envelope.indiaVixStatus) : null;
+      const suppliedFiiDiiStatus = typeof envelope.fiiDiiStatus === 'string'
+        ? providerStatus(envelope.fiiDiiStatus) : null;
+      let indiaVix: IndiaVixSnapshot | null = null;
+      let indiaVixStatus: ProviderStatus = 'no-data';
+      let indiaVixError = suppliedVixError;
+      try {
+        const vixRow = envelope.indiaVix && typeof envelope.indiaVix === 'object'
+          ? envelope.indiaVix as Record<string, unknown>
+          : null;
+        if (!vixRow) {
+          throw new Error(suppliedVixError ?? 'NSE India VIX response was not available.');
+        }
+        const vixTimestamp = vixRow.timestamp ?? vixRow.timeVal ?? vixRow.lastUpdateTime;
+        const vixTimestampText = typeof vixTimestamp === 'string' ? vixTimestamp : '';
+        const vixTimestampMs = parseNseTimestamp(vixTimestampText) ?? Date.parse(vixTimestampText);
+        const vixPrice = asOptionalNumber(vixRow.last ?? vixRow.lastPrice ?? vixRow.ltp);
+        const vixChange = asOptionalNumber(vixRow.change ?? vixRow.variation);
+        const vixChangePercent = asOptionalNumber(
+          vixRow.percentChange ?? vixRow.changePercent ?? vixRow.percChange
+        );
+        const vixOpen = asOptionalNumber(vixRow.open);
+        const vixHigh = asOptionalNumber(vixRow.high);
+        const vixLow = asOptionalNumber(vixRow.low);
+        const vixPreviousClose = asOptionalNumber(vixRow.previousClose ?? vixRow.prevClose);
+        if (vixPrice == null || vixChange == null || vixChangePercent == null
+            || vixOpen == null || vixHigh == null || vixLow == null || vixPreviousClose == null) {
+          throw new Error('NSE India VIX response is missing valid quote fields.');
+        }
+        indiaVix = {
+          symbol: 'INDIA VIX',
+          ltp: vixPrice,
+          change: vixChange,
+          changePercent: vixChangePercent,
+          open: vixOpen,
+          high: vixHigh,
+          low: vixLow,
+          previousClose: vixPreviousClose,
+          timestamp: vixTimestampText || null,
+        };
+        if (suppliedVixError) {
+          indiaVixStatus = 'error';
+        } else if (suppliedVixStatus && suppliedVixStatus !== 'loading') {
+          indiaVixStatus = suppliedVixStatus;
+        } else if (!Number.isFinite(vixTimestampMs)) {
+          indiaVixStatus = 'stale';
+          indiaVixError = 'NSE did not supply a valid source timestamp; freshness cannot be verified.';
+        } else {
+          indiaVixStatus = nseSessionStatus(vixTimestampMs);
+        }
+      } catch (error) {
+        indiaVixStatus = 'error';
+        indiaVixError = error instanceof Error ? error.message : 'NSE India VIX validation failed.';
+      }
+
+      let fiiDii: FiiDiiFlow[] = [];
+      let fiiDiiStatus: ProviderStatus = 'no-data';
+      let fiiDiiError = suppliedFiiDiiError;
+      try {
+        const fiiDiiPayload = envelope.fiiDii && typeof envelope.fiiDii === 'object'
+          ? envelope.fiiDii as Record<string, unknown>
+          : null;
+        if (!Array.isArray(fiiDiiPayload?.value)) {
+          throw new Error(suppliedFiiDiiError ?? 'NSE FII/DII response did not contain a value array.');
+        }
+        fiiDii = (fiiDiiPayload.value as unknown[])
+          .flatMap((value): FiiDiiFlow[] => {
+            if (!value || typeof value !== 'object') return [];
+            const row = value as Record<string, unknown>;
+            const category = row.category;
+            if (category !== 'FII/FPI' && category !== 'DII') return [];
+            const buyValue = asOptionalNumber(row.buyValue);
+            const sellValue = asOptionalNumber(row.sellValue);
+            const netValue = asOptionalNumber(row.netValue);
+            if (buyValue == null || sellValue == null || netValue == null) return [];
+            return [{
+              category,
+              date: typeof row.date === 'string' ? row.date : null,
+              buyValue,
+              sellValue,
+              netValue,
+            }];
+          });
+        const categories = new Set(fiiDii.map((flow) => flow.category));
+        if (!categories.has('FII/FPI') || !categories.has('DII')) {
+          throw new Error('NSE FII/DII response is missing valid FII/FPI or DII records.');
+        }
+        fiiDiiStatus = suppliedFiiDiiError ? 'error'
+          : suppliedFiiDiiStatus && suppliedFiiDiiStatus !== 'loading'
+            ? suppliedFiiDiiStatus : flowReportStatus(fiiDii);
+      } catch (error) {
+        fiiDiiStatus = 'error';
+        fiiDiiError = error instanceof Error ? error.message : 'NSE FII/DII validation failed.';
+      }
+
+      const data: NsePremarketFeeds = {
+        retrievedAt,
+        indiaVix,
+        indiaVixStatus,
+        indiaVixError,
+        fiiDii,
+        fiiDiiStatus,
+        fiiDiiError,
+      };
+      const statuses = [indiaVixStatus, fiiDiiStatus];
+      const status: ProviderStatus = statuses.includes('error')
+        ? 'error'
+        : statuses.includes('stale') ? 'stale'
+          : statuses.includes('live') ? 'live'
+            : statuses.includes('collected') || statuses.includes('report-collected') ? 'collected' : 'no-data';
+      const errors = [indiaVixError, fiiDiiError].filter((message): message is string => message != null);
+      return {
+        status,
+        lastUpdated: retrievedAt,
+        latency: retrievedAt - startedAt,
+        error: errors.length ? errors.join(' ') : null,
+        data,
+      };
+    } catch (error) {
+      return {
+        status: 'error',
+        lastUpdated: null,
+        latency: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : 'NSE premarket data request failed.',
+        data: null,
+      };
+    }
+  }
+
+  async refreshAll(refreshOptions: { includePremarketFeeds?: boolean } = {}): Promise<MarketDataBundle> {
+    const premarketPromise = refreshOptions.includePremarketFeeds ? this.getPremarketFeeds() : undefined;
+    const indiaVixPromise = premarketPromise
+      ? premarketPromise.then((state): ProviderState<IndiaVixSnapshot> => ({
+        status: state.data?.indiaVixStatus ?? state.status,
+        lastUpdated: state.data?.retrievedAt ?? state.lastUpdated,
+        latency: state.latency,
+        error: state.data?.indiaVixError ?? state.error,
+        data: state.data?.indiaVix ?? null,
+      }))
+      : this.getIndiaVix();
+    const [marketContext, constituents, optionExpiries, indiaVix, indices, premarket] = await Promise.all([
       this.getMarketContext(),
       this.getConstituents(),
       this.getOptionExpiries(),
-      this.getIndiaVix(),
-      this.getMarketStatistics(),
+      indiaVixPromise,
       this.getIndices(),
+      premarketPromise ?? Promise.resolve(undefined),
     ]);
+    const marketStatistics = this.getMarketStatistics(constituents);
     const nifty = mapNiftyContext(marketContext.data?.nifty ?? null, marketContext.error);
     const futures = mapFuturesContext(marketContext.data?.futures ?? null, marketContext.error);
     const selectedOptionExpiry = selectNearestExpiry(optionExpiries.data ?? []);
@@ -1548,6 +2041,7 @@ export class NseMarketDataProvider {
       optionExpiries,
       selectedOptionExpiry,
       features: null,
+      ...(premarket ? { premarket } : {}),
     };
     return {
       ...baseBundle,

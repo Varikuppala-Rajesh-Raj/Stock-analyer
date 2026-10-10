@@ -313,11 +313,11 @@ function formatFeaturePercent(value: number | null | undefined): string {
 
 function formatMomentumPercent(
   value: number | null | undefined,
-  status: 'COLLECTING' | 'AVAILABLE' | 'STALE' | 'UNAVAILABLE' | undefined
+  status: 'COLLECTING' | 'AVAILABLE' | 'COLLECTED' | 'STALE' | 'UNAVAILABLE' | undefined
 ): string {
   if (status === 'UNAVAILABLE') return 'Unavailable';
   if (status === 'STALE') return 'Stale';
-  if (status !== 'AVAILABLE' || value == null) return 'Collecting';
+  if ((status !== 'AVAILABLE' && status !== 'COLLECTED') || value == null) return 'Collecting';
   return formatFeaturePercent(value);
 }
 
@@ -327,11 +327,11 @@ function formatPercentagePoints(value: number | null | undefined): string {
 
 function formatMetricPercentagePoints(
   value: number | null | undefined,
-  status: 'COLLECTING' | 'AVAILABLE' | 'STALE' | 'UNAVAILABLE' | undefined
+  status: 'COLLECTING' | 'AVAILABLE' | 'COLLECTED' | 'STALE' | 'UNAVAILABLE' | undefined
 ): string {
   if (status === 'UNAVAILABLE') return 'Unavailable';
   if (status === 'STALE') return 'Stale';
-  if (status !== 'AVAILABLE') return 'Collecting';
+  if (status !== 'AVAILABLE' && status !== 'COLLECTED') return 'Collecting';
   return formatPercentagePoints(value);
 }
 
