@@ -28,6 +28,12 @@ public class MarketDataService {
  public List<Candle> fetchHistoricalForTraining(String symbol, Timeframe timeframe, LocalDate from, LocalDate to) {
   return fetchHistoricalTrainingData(symbol,timeframe,from,to).candles();
  }
+ public List<Candle> liveIntraday(String symbol, Timeframe timeframe) {
+  if (!realHistoricalProviderSelected) throw new MarketDataUnavailableException("Live intraday candles require MARKET_DATA_PROVIDER=upstox.");
+  if (!timeframe.supportsIntraday()) throw new IllegalArgumentException("Timeframe is not supported for intraday: " + timeframe);
+  Instrument instrument=instrument(symbol);
+  return normalise(provider.getIntradayCandles(instrument.instrumentKey(),timeframe));
+ }
  public TrainingHistory fetchHistoricalTrainingData(String symbol, Timeframe timeframe, LocalDate from, LocalDate to) {
   if (!realHistoricalProviderSelected) throw new MarketDataUnavailableException("Real historical training requires MARKET_DATA_PROVIDER=upstox.");
   Instrument instrument=instrument(symbol);
@@ -60,11 +66,11 @@ public class MarketDataService {
   if (!timeframe.supportsIntraday()) throw new IllegalArgumentException("Timeframe is not supported for intraday: " + timeframe);
   Instrument instrument=instrument(symbol); String key=instrument.instrumentKey(); String range="intraday";
   List<Candle> cached=cache.getCandles(key,timeframe,range).map(this::normalise).orElse(List.of());
-  if (cached.size() >= ANALYSIS_MINIMUM_CANDLES) return cached;
 
   LocalDate to=LocalDate.now(); LocalDate from=to.minusDays(analysisHistoryDays);
   String historicalRange="analysis:" + from + ":" + to;
-  List<Candle> historical=cache.getCandles(key,timeframe,historicalRange).map(this::normalise).orElseGet(() -> {
+  List<Candle> historical=cached.size() >= ANALYSIS_MINIMUM_CANDLES ? cached
+          : cache.getCandles(key,timeframe,historicalRange).map(this::normalise).orElseGet(() -> {
     List<Candle> persisted=normalise(persistence.find(key,timeframe,from,to));
     if (persisted.size() >= ANALYSIS_MINIMUM_CANDLES) {
      cache.putCandles(key,timeframe,historicalRange,persisted);
@@ -81,13 +87,7 @@ public class MarketDataService {
     }
   });
 
-  // This request occurs only while replenishing a cache miss or insufficient intraday entry.
-  List<Candle> latest;
-  try {
-    latest = provider.getIntradayCandles(key, timeframe);
-} catch (MarketDataUnavailableException e) {
-    latest = List.of();
-}
+  List<Candle> latest=normalise(provider.getIntradayCandles(key, timeframe));
   List<Candle> combined=recentWindow(merge(historical,latest));
   if (combined.size() < ANALYSIS_MINIMUM_CANDLES) throw new MarketDataUnavailableException("Upstox returned only " + combined.size() + " chronological " + timeframe + " candles for " + symbol + "; at least " + ANALYSIS_MINIMUM_CANDLES + " are required for analysis.");
   persistence.upsert(key,timeframe,combined);

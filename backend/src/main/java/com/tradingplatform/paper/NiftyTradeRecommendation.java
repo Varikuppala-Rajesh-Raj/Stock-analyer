@@ -22,6 +22,7 @@ public record NiftyTradeRecommendation(
         BigDecimal targetPrice,
         BigDecimal riskReward,
         Integer signalStrength,
+        String technicalSignal,
         BigDecimal expectedNiftyMovePoints,
         Integer quantity,
         List<String> evidence

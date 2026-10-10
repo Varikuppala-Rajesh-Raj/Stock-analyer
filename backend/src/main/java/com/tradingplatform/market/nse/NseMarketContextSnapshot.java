@@ -9,7 +9,7 @@ public record NseMarketContextSnapshot(
         Metric futuresLead
 ) {
     public enum Status {
-        COLLECTING, AVAILABLE, STALE, UNAVAILABLE
+        COLLECTING, AVAILABLE, COLLECTED, STALE, UNAVAILABLE
     }
 
     public record Metric(Double value, Status status) {}

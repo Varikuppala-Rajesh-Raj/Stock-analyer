@@ -2,6 +2,7 @@ package com.tradingplatform.market;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -15,10 +16,98 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class MarketDataServiceTest {
+
+    @Test
+    void liveIntradayReadsOnlyProviderCandlesAndDoesNotUseHistoricalCache() {
+        InstrumentCatalogService catalog = mock(InstrumentCatalogService.class);
+        UpstoxMarketDataProvider upstox = mock(UpstoxMarketDataProvider.class);
+        Instrument nifty = new Instrument(
+                "NSE_INDEX|Nifty 50", "NIFTY", "Nifty 50", "NSE", "NSE_INDEX", null, true);
+        Instant latest = Instant.now().truncatedTo(ChronoUnit.MINUTES);
+        when(catalog.resolveSymbol(nifty.instrumentKey())).thenReturn(nifty);
+        when(upstox.getIntradayCandles(nifty.instrumentKey(), Timeframe.M1))
+                .thenReturn(List.of(candle(latest)));
+        MarketDataService service = new MarketDataService(
+                catalog, upstox, mock(MockMarketDataProvider.class), mock(MarketDataCache.class),
+                mock(CandlePersistenceService.class), "upstox", 10, 500, 300);
+
+        List<Candle> candles = service.liveIntraday(nifty.instrumentKey(), Timeframe.M1);
+
+        assertEquals(List.of(latest), candles.stream().map(Candle::timestamp).toList());
+        verify(upstox).getIntradayCandles(nifty.instrumentKey(), Timeframe.M1);
+    }
+
+    @Test
+    void liveIntradayDoesNotPretendMockDataIsLive() {
+        MarketDataService service = new MarketDataService(
+                mock(InstrumentCatalogService.class), mock(UpstoxMarketDataProvider.class),
+                mock(MockMarketDataProvider.class), mock(MarketDataCache.class),
+                mock(CandlePersistenceService.class), "mock", 10, 500, 300);
+
+        assertThrows(MarketDataUnavailableException.class,
+                () -> service.liveIntraday("NSE_INDEX|Nifty 50", Timeframe.M1));
+    }
+
+    @Test
+    void intradayRefreshesProviderEvenWhenCacheAlreadyHasEnoughCandles() {
+        InstrumentCatalogService catalog = mock(InstrumentCatalogService.class);
+        UpstoxMarketDataProvider upstox = mock(UpstoxMarketDataProvider.class);
+        MarketDataCache cache = mock(MarketDataCache.class);
+        CandlePersistenceService persistence = mock(CandlePersistenceService.class);
+        Instrument nifty = new Instrument(
+                "NSE_INDEX|Nifty 50", "NIFTY", "Nifty 50", "NSE", "NSE_INDEX", null, true);
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MINUTES);
+        List<Candle> cached = java.util.stream.IntStream.range(1, 61)
+                .mapToObj(index -> candle(now.minus(index * 5L, ChronoUnit.MINUTES)))
+                .toList();
+        Candle newest = candle(now);
+        when(catalog.resolveSymbol("NIFTY")).thenReturn(nifty);
+        when(cache.getCandles(nifty.instrumentKey(), Timeframe.M5, "intraday"))
+                .thenReturn(Optional.of(cached));
+        when(upstox.getIntradayCandles(nifty.instrumentKey(), Timeframe.M5))
+                .thenReturn(List.of(newest));
+        MarketDataService service = new MarketDataService(
+                catalog, upstox, mock(MockMarketDataProvider.class), cache, persistence,
+                "upstox", 10, 500, 300);
+
+        List<Candle> result = service.intraday("NIFTY", Timeframe.M5);
+
+        assertEquals(now, result.get(result.size() - 1).timestamp());
+        verify(upstox).getIntradayCandles(nifty.instrumentKey(), Timeframe.M5);
+        verify(persistence).upsert(eq(nifty.instrumentKey()), eq(Timeframe.M5), any());
+        verify(cache).putCandles(eq(nifty.instrumentKey()), eq(Timeframe.M5), eq("intraday"), any());
+    }
+
+    @Test
+    void intradayDoesNotMaskLiveProviderFailureWithCachedCandles() {
+        InstrumentCatalogService catalog = mock(InstrumentCatalogService.class);
+        UpstoxMarketDataProvider upstox = mock(UpstoxMarketDataProvider.class);
+        MarketDataCache cache = mock(MarketDataCache.class);
+        Instrument nifty = new Instrument(
+                "NSE_INDEX|Nifty 50", "NIFTY", "Nifty 50", "NSE", "NSE_INDEX", null, true);
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MINUTES);
+        List<Candle> cached = java.util.stream.IntStream.range(1, 61)
+                .mapToObj(index -> candle(now.minus(index * 5L, ChronoUnit.MINUTES)))
+                .toList();
+        when(catalog.resolveSymbol("NIFTY")).thenReturn(nifty);
+        when(cache.getCandles(nifty.instrumentKey(), Timeframe.M5, "intraday"))
+                .thenReturn(Optional.of(cached));
+        when(upstox.getIntradayCandles(nifty.instrumentKey(), Timeframe.M5))
+                .thenThrow(new MarketDataUnavailableException("Upstox is unavailable."));
+        MarketDataService service = new MarketDataService(
+                catalog, upstox, mock(MockMarketDataProvider.class), cache,
+                mock(CandlePersistenceService.class), "upstox", 10, 500, 300);
+
+        MarketDataUnavailableException error = assertThrows(MarketDataUnavailableException.class,
+                () -> service.intraday("NIFTY", Timeframe.M5));
+
+        assertEquals("Upstox is unavailable.", error.getMessage());
+    }
 
     @Test
     void trainingHistoryUsesNonOverlappingThirtyDayChunksForOneYear() {

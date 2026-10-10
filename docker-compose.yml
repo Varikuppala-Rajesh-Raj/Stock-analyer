@@ -86,14 +86,30 @@ services:
       # Security
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
 
-      # Python ML Service
-      PYTHON_SERVICE_URL: http://python-service:8000
+      # Optional Python ML service running separately on the host
+      PYTHON_SERVICE_URL: ${PYTHON_SERVICE_URL:-http://host.docker.internal:8000}
 
       # ========================================
       # Market Data
       # ========================================
       MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-mock}
       TRADING_OPTIONS_COLLECTION_ENABLED: ${TRADING_OPTIONS_COLLECTION_ENABLED:-false}
+      MARKET_BIAS_GAP_THRESHOLD_PCT: ${MARKET_BIAS_GAP_THRESHOLD_PCT:-0.15}
+      MARKET_BIAS_FLOW_NEUTRAL_THRESHOLD_CR: ${MARKET_BIAS_FLOW_NEUTRAL_THRESHOLD_CR:-500}
+      MARKET_BIAS_FUTURES_OI_THRESHOLD_PCT: ${MARKET_BIAS_FUTURES_OI_THRESHOLD_PCT:-0.1}
+      MARKET_BIAS_RETURN_NEUTRAL_THRESHOLD_PCT: ${MARKET_BIAS_RETURN_NEUTRAL_THRESHOLD_PCT:-0.05}
+      MARKET_BIAS_PCR_SUPPORTIVE_THRESHOLD: ${MARKET_BIAS_PCR_SUPPORTIVE_THRESHOLD:-1.1}
+      MARKET_BIAS_PCR_BEARISH_THRESHOLD: ${MARKET_BIAS_PCR_BEARISH_THRESHOLD:-0.9}
+      MARKET_BIAS_MINIMUM_DATA_QUALITY_PCT: ${MARKET_BIAS_MINIMUM_DATA_QUALITY_PCT:-70}
+      MARKET_BIAS_MINIMUM_ALIGNED_GROUPS: ${MARKET_BIAS_MINIMUM_ALIGNED_GROUPS:-3}
+      MARKET_BIAS_MAXIMUM_OPPOSING_GROUPS: ${MARKET_BIAS_MAXIMUM_OPPOSING_GROUPS:-1}
+      MARKET_BIAS_GLOBAL_WEIGHT: ${MARKET_BIAS_GLOBAL_WEIGHT:-1}
+      MARKET_BIAS_DOMESTIC_WEIGHT: ${MARKET_BIAS_DOMESTIC_WEIGHT:-1}
+      MARKET_BIAS_TECHNICAL_WEIGHT: ${MARKET_BIAS_TECHNICAL_WEIGHT:-1}
+      MARKET_BIAS_OPTIONS_WEIGHT: ${MARKET_BIAS_OPTIONS_WEIGHT:-1}
+      MARKET_BIAS_VOLATILITY_WEIGHT: ${MARKET_BIAS_VOLATILITY_WEIGHT:-1}
+      MARKET_BIAS_VIX_MAX_AGE_SECONDS: ${MARKET_BIAS_VIX_MAX_AGE_SECONDS:-180}
+      MARKET_BIAS_FLOW_MAX_AGE_DAYS: ${MARKET_BIAS_FLOW_MAX_AGE_DAYS:-7}
 
       # Mock stream
       MOCK_INSTRUMENT_KEY: ${MOCK_INSTRUMENT_KEY:-MOCK|NIFTY25000CE}
@@ -110,6 +126,11 @@ services:
       UPSTOX_REDIRECT_URI: ${UPSTOX_REDIRECT_URI:-}
       UPSTOX_WEBSOCKET_ENABLED: ${UPSTOX_WEBSOCKET_ENABLED:-true}
       UPSTOX_INSTRUMENT_MASTER_URL: ${UPSTOX_INSTRUMENT_MASTER_URL:-}
+      UPSTOX_OVERNIGHT_INSTRUMENT_MASTER_URL: ${UPSTOX_OVERNIGHT_INSTRUMENT_MASTER_URL:-https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz}
+      UPSTOX_GLOBAL_INSTRUMENT_MASTER_PATH: ${UPSTOX_GLOBAL_INSTRUMENT_MASTER_PATH:-/app/data/global.json.gz}
+      UPSTOX_COMPLETE_INSTRUMENT_MASTER_PATH: ${UPSTOX_COMPLETE_INSTRUMENT_MASTER_PATH:-/app/data/complete.json.gz}
+      GLOBAL_USDINR_INSTRUMENT_KEY: ${GLOBAL_USDINR_INSTRUMENT_KEY:-}
+      GLOBAL_CRUDE_OIL_INSTRUMENT_KEY: ${GLOBAL_CRUDE_OIL_INSTRUMENT_KEY:-}
 
       # ========================================
       # Groq
@@ -161,6 +182,10 @@ services:
     ports:
       - "8080:8080"
 
+    volumes:
+      - ./data/global.json.gz:/app/data/global.json.gz:ro
+      - ./data/complete.json.gz:/app/data/complete.json.gz:ro
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -204,63 +229,6 @@ services:
   #   networks:
   #     - trading-network
 
-
-  # ========================================
-  # Python ML Service
-  # ========================================
-  python-service:
-    build:
-      context: ./ml-service
-      dockerfile: Dockerfile
-
-    container_name: trading-platform-ml
-
-    environment:
-      PYTHON_ENV: docker
-      SERVER_PORT: 8000
-
-      # PostgreSQL
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-trading_platform}
-      DB_USER: ${DB_USER:-trading_user}
-      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
-
-      # Redis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-
-    ports:
-      - "8000:8000"
-
-    volumes:
-      - ml_models:/app/models
-
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-    networks:
-      - trading-network
-
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "curl",
-          "-f",
-          "http://localhost:8000/health"
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-
 # ========================================
 # Named Volumes
 # ========================================
@@ -269,8 +237,6 @@ volumes:
     driver: local
 
   redis_data:
-    driver: local
-  ml_models:
     driver: local
 
 

@@ -35,6 +35,7 @@ import org.springframework.stereotype.Service;
 public class NiftyPaperTradingCycleService {
     private static final Logger log = LoggerFactory.getLogger(NiftyPaperTradingCycleService.class);
     private static final ZoneId INDIA = ZoneId.of("Asia/Kolkata");
+    private static final int MIN_NIFTY_SIGNAL_STRENGTH = 60;
     private final MarketDataService marketData;
     private final AnalysisService analysis;
     private final NseMarketContextService contextService;
@@ -44,6 +45,7 @@ public class NiftyPaperTradingCycleService {
     private final PaperPriceService paperPrices;
     private final PaperTradingAutomationService automation;
     private final PaperAutomationCycleRepository cycleRepository;
+    private final PaperMarketBiasGate marketBiasGate;
     private final Duration maxContextAge;
     private final BigDecimal maxStopLossPercent;
     private final BigDecimal rewardRiskMultiple;
@@ -70,7 +72,8 @@ public class NiftyPaperTradingCycleService {
             PaperPriceService paperPrices,
             PaperTradingAutomationService automation,
             PaperAutomationCycleRepository cycleRepository,
-            @Value("${trading.paper.automation.max-context-age-seconds:60}") long maxContextAgeSeconds,
+            PaperMarketBiasGate marketBiasGate,
+            @Value("${trading.paper.automation.max-context-age-seconds:180}") long maxContextAgeSeconds,
             @Value("${trading.paper.automation.max-stop-loss-percent:30}") BigDecimal maxStopLossPercent,
             @Value("${trading.paper.automation.reward-risk-multiple:2}") BigDecimal rewardRiskMultiple,
             @Value("${trading.paper.automation.min-risk-reward:1.5}") BigDecimal minRiskReward,
@@ -86,6 +89,7 @@ public class NiftyPaperTradingCycleService {
         this.paperPrices = paperPrices;
         this.automation = automation;
         this.cycleRepository = cycleRepository;
+        this.marketBiasGate = marketBiasGate;
         this.maxContextAge = Duration.ofSeconds(maxContextAgeSeconds);
         this.maxStopLossPercent = maxStopLossPercent;
         this.rewardRiskMultiple = rewardRiskMultiple;
@@ -175,18 +179,9 @@ public class NiftyPaperTradingCycleService {
         }
 
         NseMarketContextSnapshot snapshot = contextService.snapshot();
-        if (snapshot.nifty() == null || snapshot.futures() == null
-                || snapshot.nifty().status() != NseMarketContextSnapshot.Status.AVAILABLE
-                || snapshot.futures().status() != NseMarketContextSnapshot.Status.AVAILABLE
-                || !fresh(snapshot.nifty().timestamp(), now)
-                || !fresh(snapshot.futures().timestamp(), now)
-                || snapshot.nifty().ltp() == null || snapshot.futures().ltp() == null
-                || snapshot.futures().return5m() == null
-                || snapshot.futures().return5m().status() != NseMarketContextSnapshot.Status.AVAILABLE
-                || snapshot.futuresLead() == null
-                || snapshot.futuresLead().status() != NseMarketContextSnapshot.Status.AVAILABLE) {
-            return noTradeEvaluation("NO_TRADE", "NIFTY_OR_FUTURES_CONTEXT_STALE_OR_UNAVAILABLE",
-                    null, null, null, null, null);
+        String contextBlockReason = niftyContextBlockReason(snapshot, now, maxContextAge);
+        if (contextBlockReason != null) {
+            return noTradeEvaluation("NO_TRADE", contextBlockReason, null, null, null, null, null);
         }
 
         List<Candle> candles;
@@ -195,9 +190,8 @@ public class NiftyPaperTradingCycleService {
         } catch (MarketDataUnavailableException exception) {
             return noTradeEvaluation("NO_TRADE", "FRESH_NIFTY_CANDLES_UNAVAILABLE", null, null, null, null, null);
         }
-        Duration candleAge = candles.isEmpty() ? null
-                : Duration.between(candles.get(candles.size() - 1).timestamp(), now);
-        if (candleAge == null || candleAge.isNegative() || candleAge.compareTo(maxContextAge) > 0) {
+        if (candles.isEmpty()
+                || !isFreshNiftyCandle(candles.get(candles.size() - 1), now, maxContextAge)) {
             return noTradeEvaluation("NO_TRADE", "NIFTY_CANDLES_STALE", null, null, null, null, null);
         }
         if (!withinPercent(candles.get(candles.size() - 1).close(),
@@ -207,20 +201,20 @@ public class NiftyPaperTradingCycleService {
         }
 
         SignalResult signal = analysis.analyze("NIFTY", Timeframe.M5, candles);
-        double futuresLead = snapshot.futuresLead().value() == null ? 0 : snapshot.futuresLead().value();
-        String direction;
-        double futuresReturn = snapshot.futures().return5m().value() == null
-                ? 0 : snapshot.futures().return5m().value();
-        if (signal.signal() == Signal.BUY && signal.signalStrength() >= 65
-                && futuresReturn > 0 && futuresLead >= 0) {
-            direction = "UP";
-        } else if (signal.signal() == Signal.SELL && signal.signalStrength() >= 65
-                && futuresReturn < 0 && futuresLead <= 0) {
-            direction = "DOWN";
-        } else {
-            return noTradeEvaluation("NO_TRADE", "NO_CLEAR_EDGE_OR_FUTURES_DIVERGENCE", null, null, null,
+        String signalBlockReason = niftySignalBlockReason(signal.signal(), signal.signalStrength());
+        if (signalBlockReason != null) {
+            return noTradeEvaluation("NO_TRADE", signalBlockReason, null, null, null, null,
+                    signal.signalStrength(), signal.signal().name());
+        }
+        String direction = niftySignalDirection(signal.signal(), signal.signalStrength());
+        NseMarketContextSnapshot.Metric futuresMomentum = freshFuturesMomentum(snapshot, now, maxContextAge);
+        if (futuresOpposes(direction, futuresMomentum)) {
+            return noTradeEvaluation("NO_TRADE", "FUTURES_5M_OPPOSES_NIFTY_SIGNAL", direction, null, null,
                     null, signal.signalStrength());
         }
+        String futuresEvidence = futuresMomentum == null
+                ? "Futures 5m confirmation unavailable; using the qualifying NIFTY signal as primary"
+                : "Futures 5m return " + futuresMomentum.value() + "% confirms the NIFTY signal";
 
         String optionType = "UP".equals(direction) ? "CE" : "PE";
         String expiry = optionChain.nearestNiftyExpiry()
@@ -232,6 +226,12 @@ public class NiftyPaperTradingCycleService {
         if ("HISTORICAL_SNAPSHOT".equals(chainResponse.path("dataSource").asText())) {
             return noTradeEvaluation("NO_TRADE", "LIVE_OPTION_CHAIN_REQUIRED", direction, optionType,
                     expiry, null, signal.signalStrength());
+        }
+        PaperMarketBiasGate.Assessment bias = marketBiasGate.assess(
+                snapshot, signal.signal(), signal.signalStrength(), chainResponse, now);
+        if (!bias.tradeReady()) {
+            return noTradeEvaluation("NO_TRADE", bias.reason(), direction, optionType,
+                    expiry, null, signal.signalStrength(), signal.signal().name());
         }
         var contract = selector.select(chainResponse, optionType).orElse(null);
         if (contract == null) return noTradeEvaluation("NO_TRADE", "NO_LIQUID_OPTION_CONTRACT",
@@ -310,12 +310,16 @@ public class NiftyPaperTradingCycleService {
                 expiry, contract.strike(), contract.instrumentKey(),
                 BigDecimal.valueOf(snapshot.nifty().ltp()), freshOptionPrice.value(),
                 contract.bid(), contract.ask(), entry, stop, target,
-                BigDecimal.valueOf(riskReward), signal.signalStrength(),
+                BigDecimal.valueOf(riskReward), signal.signalStrength(), signal.signal().name(),
                 "UP".equals(direction) ? expectedMove : expectedMove.negate(), quantity,
                 List.of(
                         "NIFTY " + signal.signal() + " signal strength " + signal.signalStrength() + "/100",
-                        "Futures 5m return " + futuresReturn + "% with " + futuresLead + "% lead",
+                        futuresEvidence,
                         "Selected " + optionType + " contract passed liquidity, spread, delta, and ATM-distance filters",
+                        "One official lot is " + quantity + " option units; estimated premium outlay is "
+                                + entry.multiply(BigDecimal.valueOf(quantity)).setScale(2, RoundingMode.HALF_UP),
+                        "Each 1-point option premium move changes gross P&L by " + quantity
+                                + " before charges",
                         "Risk/reward " + BigDecimal.valueOf(riskReward).setScale(2, RoundingMode.HALF_UP)
                                 + " meets the configured minimum"
                 ));
@@ -326,11 +330,19 @@ public class NiftyPaperTradingCycleService {
             String status, String reason, String direction, String optionType, String expiry,
             BigDecimal strike, Integer signalStrength
     ) {
+        return noTradeEvaluation(status, reason, direction, optionType, expiry, strike, signalStrength, null);
+    }
+
+    private TradeEvaluation noTradeEvaluation(
+            String status, String reason, String direction, String optionType, String expiry,
+            BigDecimal strike, Integer signalStrength, String technicalSignal
+    ) {
         NiftyPaperTradingCycleResult cycleResult =
                 result(status, reason, direction, optionType, expiry, strike, signalStrength);
         NiftyTradeRecommendation recommendation = new NiftyTradeRecommendation(
                 cycleResult.timestamp(), "NO_TRADE", reason, direction, optionType, expiry, strike,
-                null, null, null, null, null, null, null, null, null, signalStrength, null, null, List.of());
+                null, null, null, null, null, null, null, null, null, signalStrength, technicalSignal,
+                null, null, List.of());
         return new TradeEvaluation(cycleResult, recommendation, null);
     }
 
@@ -342,7 +354,60 @@ public class NiftyPaperTradingCycleService {
         return cycleRepository.findTop100ByOrderByTimestampDesc();
     }
 
-    private boolean fresh(String sourceTimestamp, Instant now) {
+    static String niftyContextBlockReason(NseMarketContextSnapshot snapshot, Instant now, Duration maxAge) {
+        if (snapshot == null || snapshot.nifty() == null) return "NIFTY_CONTEXT_UNAVAILABLE";
+        if (snapshot.nifty().status() != NseMarketContextSnapshot.Status.AVAILABLE) {
+            return "NIFTY_CONTEXT_" + snapshot.nifty().status();
+        }
+        if (!fresh(snapshot.nifty().timestamp(), now, maxAge)) return "NIFTY_CONTEXT_TOO_OLD";
+        if (snapshot.nifty().ltp() == null) return "NIFTY_SPOT_PRICE_UNAVAILABLE";
+        return null;
+    }
+
+    static String niftySignalDirection(Signal signal, int strength) {
+        if (signal == Signal.BUY && strength >= MIN_NIFTY_SIGNAL_STRENGTH) return "UP";
+        if (signal == Signal.SELL && strength >= MIN_NIFTY_SIGNAL_STRENGTH) return "DOWN";
+        return null;
+    }
+
+    static String niftySignalBlockReason(Signal signal, int strength) {
+        if (signal == null || signal == Signal.HOLD) return "NIFTY_SIGNAL_NOT_DIRECTIONAL";
+        if (strength < MIN_NIFTY_SIGNAL_STRENGTH) return "NIFTY_SIGNAL_BELOW_ENTRY_THRESHOLD";
+        return null;
+    }
+
+    static boolean futuresOpposes(String direction, NseMarketContextSnapshot.Metric futuresMomentum) {
+        if (futuresMomentum == null || futuresMomentum.status() != NseMarketContextSnapshot.Status.AVAILABLE
+                || futuresMomentum.value() == null || !Double.isFinite(futuresMomentum.value())) {
+            return false;
+        }
+        return ("UP".equals(direction) && futuresMomentum.value() < 0)
+                || ("DOWN".equals(direction) && futuresMomentum.value() > 0);
+    }
+
+    private NseMarketContextSnapshot.Metric freshFuturesMomentum(
+            NseMarketContextSnapshot snapshot, Instant now, Duration maxAge
+    ) {
+        if (snapshot.futures() == null
+                || snapshot.futures().status() != NseMarketContextSnapshot.Status.AVAILABLE
+                || !fresh(snapshot.futures().timestamp(), now, maxAge)
+                || snapshot.futures().return5m() == null
+                || snapshot.futures().return5m().status() != NseMarketContextSnapshot.Status.AVAILABLE) {
+            return null;
+        }
+        return snapshot.futures().return5m();
+    }
+
+    static boolean isFreshNiftyCandle(Candle candle, Instant now, Duration maxAge) {
+        if (candle == null || candle.timestamp() == null || now == null
+                || maxAge == null || maxAge.isNegative() || candle.timestamp().isAfter(now)) {
+            return false;
+        }
+        Duration maxCandleAge = maxAge.plus(Duration.ofMinutes(Timeframe.M5.interval()));
+        return Duration.between(candle.timestamp(), now).compareTo(maxCandleAge) <= 0;
+    }
+
+    private static boolean fresh(String sourceTimestamp, Instant now, Duration maxAge) {
         if (sourceTimestamp == null || sourceTimestamp.isBlank()) return false;
         try {
             Instant timestamp;
@@ -358,7 +423,7 @@ public class NiftyPaperTradingCycleService {
             }
 
             Duration age = Duration.between(timestamp, now);
-            return !age.isNegative() && age.compareTo(maxContextAge) <= 0;
+            return !age.isNegative() && age.compareTo(maxAge) <= 0;
         } catch (DateTimeParseException exception) {
             return false;
         }

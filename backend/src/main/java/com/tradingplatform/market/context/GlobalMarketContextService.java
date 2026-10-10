@@ -28,9 +28,12 @@ public class GlobalMarketContextService {
     private final String nasdaq;
     private final String dow;
     private final String asianMarket;
+    private final String nikkei;
+    private final String hangSeng;
     private final String indiaVix;
     private final String usdInr;
     private final String crude;
+    private final String wti;
     private final String gold;
     private final String us10y;
 
@@ -38,6 +41,7 @@ public class GlobalMarketContextService {
             InstrumentCatalogService catalog,
             UpstoxMarketDataProvider upstox,
             MockMarketDataProvider mock,
+            UpstoxGlobalInstrumentProperties instruments,
             @Value("${trading.MARKET_DATA_PROVIDER:mock}") String selected,
             @Value("${trading.global.quote-max-age-seconds:900}") long quoteMaxAgeSeconds,
             @Value("${trading.global.instruments.gift-nifty:}") String giftNifty,
@@ -54,14 +58,17 @@ public class GlobalMarketContextService {
         this.catalog = catalog;
         this.provider = "upstox".equalsIgnoreCase(selected) ? upstox : mock;
         this.quoteMaxAge = Duration.ofSeconds(quoteMaxAgeSeconds);
-        this.giftNifty = giftNifty;
-        this.sp500 = sp500;
-        this.nasdaq = nasdaq;
-        this.dow = dow;
+        this.giftNifty = configured(instruments.giftNifty(), giftNifty);
+        this.sp500 = configured(instruments.sp500(), sp500);
+        this.nasdaq = configured(instruments.usTech100(), nasdaq);
+        this.dow = configured(instruments.dow(), dow);
         this.asianMarket = asianMarket;
+        this.nikkei = configured(instruments.nikkei(), null);
+        this.hangSeng = configured(instruments.hangSeng(), null);
         this.indiaVix = indiaVix;
-        this.usdInr = usdInr;
-        this.crude = crude;
+        this.usdInr = configured(instruments.usdInr(), usdInr);
+        this.crude = configured(instruments.crudeOil(), configured(instruments.brent(), crude));
+        this.wti = configured(instruments.wti(), null);
         this.gold = gold;
         this.us10y = us10y;
     }
@@ -75,9 +82,11 @@ public class GlobalMarketContextService {
                 GlobalMarketFeatureCalculator.returnOver(giftCandles, Duration.ofMinutes(5)),
                 GlobalMarketFeatureCalculator.returnOver(giftCandles, Duration.ofMinutes(30)),
                 GlobalMarketFeatureCalculator.returnPercent(giftQuote == null ? null : giftQuote.price(), giftQuote == null ? null : giftQuote.previousClose()),
-                quoteReturn(sp500), quoteReturn(nasdaq), quoteReturn(dow), quoteReturn(asianMarket),
+                quoteReturn(sp500), quoteReturn(nasdaq), quoteReturn(dow),
+                average(quoteReturn(nikkei), quoteReturn(hangSeng), quoteReturn(asianMarket)),
                 vixQuote == null ? null : vixQuote.price().doubleValue(),
-                quoteReturn(indiaVix), quoteReturn(usdInr), quoteReturn(crude), quoteReturn(gold),
+                quoteReturn(indiaVix), quoteReturn(usdInr),
+                average(quoteReturn(crude), quoteReturn(wti)), quoteReturn(gold),
                 quoteReturn(us10y));
     }
 
@@ -89,7 +98,7 @@ public class GlobalMarketContextService {
     private Quote quote(String symbol) {
         if (blank(symbol)) return null;
         try {
-            Instrument instrument = catalog.resolveSymbol(symbol);
+            Instrument instrument = instrument(symbol);
             Quote quote = provider.getQuote(instrument);
             return MarketDataNormalizer.isQuoteStale(quote, quoteMaxAge) ? null : quote;
         } catch (IllegalArgumentException | MarketDataUnavailableException ignored) {
@@ -100,7 +109,7 @@ public class GlobalMarketContextService {
     private List<Candle> candles(String symbol) {
         if (blank(symbol)) return List.of();
         try {
-            Instrument instrument = catalog.resolveSymbol(symbol);
+            Instrument instrument = instrument(symbol);
             List<Candle> values = MarketDataNormalizer.normalizeCandles(provider.getIntradayCandles(instrument.instrumentKey(), Timeframe.M5));
             if (values.isEmpty() || MarketDataNormalizer.isCandleStale(values.get(values.size() - 1), quoteMaxAge)) return List.of();
             return values;
@@ -111,5 +120,28 @@ public class GlobalMarketContextService {
 
     private static boolean blank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private Instrument instrument(String keyOrSymbol) {
+        if (keyOrSymbol.contains("|")) {
+            return new Instrument(keyOrSymbol, keyOrSymbol, keyOrSymbol, "GLOBAL", "GLOBAL", "", true);
+        }
+        return catalog.resolveSymbol(keyOrSymbol);
+    }
+
+    private static String configured(String instrumentKey, String legacySymbol) {
+        return blank(instrumentKey) ? legacySymbol : instrumentKey;
+    }
+
+    private static Double average(Double... values) {
+        double total = 0;
+        int count = 0;
+        for (Double value : values) {
+            if (value != null && Double.isFinite(value)) {
+                total += value;
+                count++;
+            }
+        }
+        return count == 0 ? null : total / count;
     }
 }

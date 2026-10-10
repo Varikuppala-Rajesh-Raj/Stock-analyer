@@ -45,26 +45,6 @@ class UpstoxGlobalInstrumentIntegrationTest {
         ),
 
         new Instrument(
-            "GLOBAL_INDICATOR|USDINR",
-            "USD INR",
-            "USD/INR",
-            "GLOBAL",
-            "GLOBAL_INDICATOR",
-            "",
-            true
-        ),
-
-        new Instrument(
-            "GLOBAL_INDICATOR|BZUSD",
-            "BRENT",
-            "Brent Crude Oil",
-            "GLOBAL",
-            "GLOBAL_INDICATOR",
-            "",
-            true
-        ),
-
-        new Instrument(
             "GLOBAL_INDEX|^GSPC",
             "S&P 500",
             "S&P 500",
@@ -110,16 +90,6 @@ class UpstoxGlobalInstrumentIntegrationTest {
             "CAC 40",
             "GLOBAL",
             "GLOBAL_INDEX",
-            "",
-            true
-        ),
-
-        new Instrument(
-            "GLOBAL_INDICATOR|CLUSD",
-            "WTI",
-            "WTI Crude Oil",
-            "GLOBAL",
-            "GLOBAL_INDICATOR",
             "",
             true
         ),

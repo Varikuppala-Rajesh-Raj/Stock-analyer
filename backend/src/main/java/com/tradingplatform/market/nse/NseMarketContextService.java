@@ -1,14 +1,16 @@
 package com.tradingplatform.market.nse;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.tradingplatform.controller.NseMarketDataController;
 import com.tradingplatform.market.nse.NseMarketContextSnapshot.FuturesContext;
 import com.tradingplatform.market.nse.NseMarketContextSnapshot.Metric;
 import com.tradingplatform.market.nse.NseMarketContextSnapshot.NiftyContext;
 import com.tradingplatform.market.nse.NseMarketContextSnapshot.Status;
 import java.time.Duration;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
@@ -17,8 +19,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -27,13 +31,18 @@ import org.springframework.stereotype.Service;
 public class NseMarketContextService {
     private static final Logger log = LoggerFactory.getLogger(NseMarketContextService.class);
     private static final ZoneId NSE_ZONE = ZoneId.of("Asia/Kolkata");
+    private static final LocalTime NSE_SESSION_OPEN = LocalTime.of(9, 15);
+    private static final LocalTime NSE_SESSION_CLOSE = LocalTime.of(15, 30);
+    private static final LocalTime NSE_FINAL_QUOTE_GRACE = LocalTime.of(15, 45);
     private static final DateTimeFormatter NSE_TIMESTAMP = new DateTimeFormatterBuilder()
             .appendPattern("dd-MMM-yyyy HH:mm")
             .optionalStart().appendPattern(":ss").optionalEnd()
             .toFormatter(Locale.ENGLISH);
+    private static final Pattern GROUPED_NUMBER = Pattern.compile("^[+-]?\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?$");
 
-    private final NseMarketDataController nse;
+    private final NseMarketDataService nse;
     private final NseFuturesObservationService futuresObservations;
+    private final Clock clock;
     private final Duration staleAfter;
     private final Duration windowTolerance;
     private final int maxObservations;
@@ -42,15 +51,28 @@ public class NseMarketContextService {
     private String spotFailure;
     private String futuresFailure;
 
+    @Autowired
     public NseMarketContextService(
-            NseMarketDataController nse,
+            NseMarketDataService nse,
             NseFuturesObservationService futuresObservations,
             @Value("${trading.nse.market-context.stale-ms:180000}") long staleMs,
             @Value("${trading.nse.market-context.window-tolerance-ms:90000}") long toleranceMs,
             @Value("${trading.nse.market-context.max-observations:2000}") int maxObservations
     ) {
+        this(nse, futuresObservations, staleMs, toleranceMs, maxObservations, Clock.systemUTC());
+    }
+
+    NseMarketContextService(
+            NseMarketDataService nse,
+            NseFuturesObservationService futuresObservations,
+            long staleMs,
+            long toleranceMs,
+            int maxObservations,
+            Clock clock
+    ) {
         this.nse = nse;
         this.futuresObservations = futuresObservations;
+        this.clock = clock;
         this.staleAfter = Duration.ofMillis(staleMs);
         this.windowTolerance = Duration.ofMillis(toleranceMs);
         this.maxObservations = Math.max(2, maxObservations);
@@ -64,7 +86,7 @@ public class NseMarketContextService {
     }
 
     public synchronized NseMarketContextSnapshot snapshot() {
-        Instant now = Instant.now();
+        Instant now = clock.instant();
         SpotObservation spot = spotHistory.isEmpty() ? null : spotHistory.lastEntry().getValue();
         NseFuturesObservation futures = futuresHistory.isEmpty() ? null : futuresHistory.lastEntry().getValue();
 
@@ -167,7 +189,7 @@ public class NseMarketContextService {
                     openInterest, optionalLong(row, "changeinOpenInterest"),
                     optionalNumber(row, "pchangeinOpenInterest"), optionalLong(row, "totalTradedVolume"),
                     optionalNumber(row, "totalTurnover"), text(row, "underlying"), underlyingValue);
-            if (isFresh(timestamp, Instant.now())) {
+            if (isFresh(timestamp, clock.instant())) {
                 futuresObservations.persist(observation);
             } else {
                 log.warn("[NSE-CONTEXT] Skipping stale futures observation timestamped {}", sourceTimestamp);
@@ -221,7 +243,8 @@ public class NseMarketContextService {
         }
         double priorPrice = priceOf(priorEntry.getValue());
         if (!Double.isFinite(priorPrice) || priorPrice == 0) return new Metric(null, Status.COLLECTING);
-        return new Metric((currentPrice - priorPrice) / priorPrice * 100.0, Status.AVAILABLE);
+        Status metricStatus = sourceStatus == Status.COLLECTED ? Status.COLLECTED : Status.AVAILABLE;
+        return new Metric((currentPrice - priorPrice) / priorPrice * 100.0, metricStatus);
     }
 
     private static double priceOf(Object observation) {
@@ -232,7 +255,39 @@ public class NseMarketContextService {
     private Status sourceStatus(Instant sourceTimestamp, String failure, Instant now) {
         if (failure != null) return Status.UNAVAILABLE;
         if (sourceTimestamp == null) return Status.COLLECTING;
+        if (sourceTimestamp.isAfter(now.plusSeconds(5))) return Status.STALE;
+        LocalDate expectedSessionDate = requiredNseSessionDate(now);
+        LocalDate sourceSessionDate = sourceTimestamp.atZone(NSE_ZONE).toLocalDate();
+        LocalTime sourceTime = sourceTimestamp.atZone(NSE_ZONE).toLocalTime();
+        if (!sourceSessionDate.equals(expectedSessionDate)
+                || sourceTime.isBefore(NSE_SESSION_OPEN) || sourceTime.isAfter(NSE_FINAL_QUOTE_GRACE)) {
+            if (isNseSessionOpen(now) && sourceSessionDate.isBefore(expectedSessionDate)) {
+                return Status.COLLECTING;
+            }
+            return Status.STALE;
+        }
+        if (!isNseSessionOpen(now)) return Status.COLLECTED;
         return isFresh(sourceTimestamp, now) ? Status.AVAILABLE : Status.STALE;
+    }
+
+    private static LocalDate requiredNseSessionDate(Instant now) {
+        LocalDate date = now.atZone(NSE_ZONE).toLocalDate();
+        LocalTime time = now.atZone(NSE_ZONE).toLocalTime();
+        if (time.isBefore(NSE_SESSION_OPEN)) {
+            date = date.minusDays(1);
+        }
+        while (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+            date = date.minusDays(1);
+        }
+        return date;
+    }
+
+    private static boolean isNseSessionOpen(Instant now) {
+        LocalTime time = now.atZone(NSE_ZONE).toLocalTime();
+        return time.compareTo(NSE_SESSION_OPEN) >= 0 && time.isBefore(NSE_SESSION_CLOSE)
+                && now.atZone(NSE_ZONE).getDayOfWeek() != java.time.DayOfWeek.SATURDAY
+                && now.atZone(NSE_ZONE).getDayOfWeek() != java.time.DayOfWeek.SUNDAY;
     }
 
     private boolean isFresh(Instant sourceTimestamp, Instant now) {
@@ -241,8 +296,12 @@ public class NseMarketContextService {
     }
 
     private static Metric leadMetric(Metric futures5m, Metric nifty5m) {
-        if (futures5m.status() == Status.AVAILABLE && nifty5m.status() == Status.AVAILABLE) {
-            return new Metric(futures5m.value() - nifty5m.value(), Status.AVAILABLE);
+        boolean futuresUsable = futures5m.status() == Status.AVAILABLE || futures5m.status() == Status.COLLECTED;
+        boolean niftyUsable = nifty5m.status() == Status.AVAILABLE || nifty5m.status() == Status.COLLECTED;
+        if (futuresUsable && niftyUsable) {
+            Status status = futures5m.status() == Status.COLLECTED || nifty5m.status() == Status.COLLECTED
+                    ? Status.COLLECTED : Status.AVAILABLE;
+            return new Metric(futures5m.value() - nifty5m.value(), status);
         }
         if (futures5m.status() == Status.UNAVAILABLE || nifty5m.status() == Status.UNAVAILABLE) {
             return new Metric(null, Status.UNAVAILABLE);
@@ -283,22 +342,51 @@ public class NseMarketContextService {
     private static double requiredNumber(JsonNode node, String... names) {
         for (String name : names) {
             JsonNode value = node.path(name);
-            if (value.isNumber() && Double.isFinite(value.asDouble())) return value.asDouble();
+            Double parsed = numberValue(value);
+            if (parsed != null) return parsed;
         }
         throw new IllegalArgumentException("Required numeric NSE field is missing: " + String.join("/", names));
     }
 
     private static Double optionalNumber(JsonNode node, String... names) {
         for (String name : names) {
-            JsonNode value = node.path(name);
-            if (value.isNumber() && Double.isFinite(value.asDouble())) return value.asDouble();
+            Double parsed = numberValue(node.path(name));
+            if (parsed != null) return parsed;
         }
         return null;
     }
 
     private static Long optionalLong(JsonNode node, String name) {
         JsonNode value = node.path(name);
-        return value.isIntegralNumber() ? value.asLong() : null;
+        if (value.isIntegralNumber()) return value.asLong();
+        if (!value.isTextual()) return null;
+        try {
+            return new java.math.BigDecimal(normalizeNumberText(value.asText())).longValueExact();
+        } catch (NumberFormatException | ArithmeticException error) {
+            return null;
+        }
+    }
+
+    private static Double numberValue(JsonNode value) {
+        if (value.isNumber()) {
+            double parsed = value.asDouble();
+            return Double.isFinite(parsed) ? parsed : null;
+        }
+        if (!value.isTextual()) return null;
+        try {
+            double parsed = Double.parseDouble(normalizeNumberText(value.asText()));
+            return Double.isFinite(parsed) ? parsed : null;
+        } catch (NumberFormatException error) {
+            return null;
+        }
+    }
+
+    private static String normalizeNumberText(String value) {
+        String trimmed = value.trim();
+        if (trimmed.contains(",") && !GROUPED_NUMBER.matcher(trimmed).matches()) {
+            throw new NumberFormatException("Invalid grouped number.");
+        }
+        return trimmed.replace(",", "");
     }
 
     private record SpotObservation(Instant timestamp, String sourceTimestamp, double price,

@@ -33,7 +33,8 @@ Cloud/CDN (CloudFront)
          ↓
     Spring Boot Backend ← → PostgreSQL
          ↓                  Redis
-    Python ML Service
+    Optional Python ML Service
+     (run separately for ML)
          ↓
     Market Data Providers
 ```
@@ -116,6 +117,12 @@ The current order/cycle records do not yet persist per-order exit reasons, peak 
 
 The UI market-hours indicator uses the India Standard Time weekday/session window only. It cannot confirm NSE holiday closures; a displayed trading window is not proof that the exchange is open or that market data is fresh.
 
+The NSE premarket route `GET /api/nse/premarket` combines India VIX from `/api/allIndices` with FII/FPI and DII flows from `/api/fiidiiTradeReact`. Each feed is validated and persisted independently, so an error in one feed does not suppress the other; source-specific errors are returned as `indiaVixError` or `fiiDiiError`. The FII/DII adapter accepts the NSE response as either an object with a `value` array or a root array. The premarket UI distinguishes a fresh in-session VIX quote (`LIVE`) from a valid completed-session quote (`COLLECTED`) and marks dated institutional reports `REPORT COLLECTED`; a missing VIX source timestamp remains unverified and stale. The individual routes `GET /api/nse/index-data?type=INDIA%20VIX` and `GET /api/nse/fii-dii` remain available. Validated responses are appended to PostgreSQL `nse_reference_snapshots`; provider timestamps or report dates are kept separate from backend retrieval time.
+
+The NIFTY pre-market page loads saved overnight quotes from `GET /api/overnight/global` and can request a provider refresh through `POST /api/overnight/retrieve` or the refresh-all route. Overnight quote payloads expose lifecycle states (`LIVE`, `COLLECTING`, `COLLECTED`, `UNAVAILABLE`, `ERROR`, `NOT_CONFIGURED`, or `STALE`) and the observed/required logical session IDs. The lifecycle is market-timezone aware, so a matching completed session remains usable even when older than the intraday freshness limit; weekends are accounted for, but exchange holidays are not yet modeled. The weekday 6:00 PM IST scheduler refreshes the configured overnight instruments after the Indian cash-market close; the page hydrates from the database on load and does not call a provider merely to display saved quotes.
+
+In addition to the US and Asian cues, the backend resolves FTSE 100 and DAX from `data/global.json.gz`; quotes are persisted alongside USD/INR, crude-oil, gold, and Brent cues. USD/INR first uses NSE's `/api/quote-currency?key=INR` and then its historical currency-derivatives endpoint. Brent and NSE crude first use `/api/quotes-commodity-derivatives-main`; when that endpoint is unavailable, the backend checks `/json/quotes/commodity-all-contracts.json` and accepts only a contract whose symbol matches the requested instrument. Gold is sourced only from NSE: the backend reads `/api/quotes-commodity-master-filter?symbol=GOLD`, selects the nearest unexpired `FUTCOM` contract (excluding `OPTFUT`), and requests that contract from `/api/quotes-commodity-derivatives-main?category=Bullion&symbol=GOLD` with its type and expiry. It requires a positive price, daily change, and source timestamp before persisting a Gold quote; when no active futures quote is usable, Gold is reported unavailable rather than falling back to an Upstox option or unverified contract. If NSE cannot supply a usable quote for USD/INR, Brent, or NSE crude, the existing Upstox instrument resolution remains the fallback. Upstox's Brent `GLOBAL_INDICATOR|BZUSD` path uses the v2 LTP endpoint because the v3 OHLC endpoint rejects global indicators; when Upstox rejects the key with `UDAPI1087`, the backend retries the LTP endpoint with the master-listed `BZUSD` symbol. A quote missing its source timestamp or daily change is shown as stale/unverified and excluded from directional bias. Europe and timestamped global quotes contribute to the global evidence group only when their provider timestamps belong to the required session; NSE crude remains displayed as a separate domestic futures proxy to avoid double-weighting oil in the bias. The pre-market quote cards identify the stored provider, including when the quote is loaded from the database.
+
 Use **Historical dry run** (`/paper-dry-run`) to select a previous date and replay automated NIFTY option decisions from saved option-chain snapshots, futures observations, and persisted NIFTY M5 candles. It reports contract-selection rationale, risk levels, trade P&L, estimated charges, unrealized P&L, and the reasons for skipped entries. The replay is isolated from both the live broker and the normal paper account; it reads persisted data only and never fetches or fills missing historical values. Coverage is measured on the IST session grid and replay is blocked unless every input has at least 72 of 75 required intervals. Option-chain collection is disabled by default; with a supported live market-data configuration, set `TRADING_OPTIONS_COLLECTION_ENABLED=true` in `.env` to begin collecting snapshots prospectively (Docker Compose passes this setting through). Option chains and NSE futures are collected live; this project has no historical option-chain backfill, so old dates without recorded chains cannot be reconstructed. A date also needs previously collected futures observations and spot candles. Option snapshots do not retain historical exchange lot size, so verify and set the lot quantity for the selected date.
 
 Use **Manual trading** (`/manual-trading`) for simulated stock and NIFTY option entries you choose yourself. The page shows quote/option-chain analysis, lets you hold open positions and sell them, and reports realized and unrealized P&L after estimated brokerage. Its records and P&L use a dedicated ledger and do not change the automated paper-trading account or its performance.
@@ -170,14 +177,22 @@ cp .env.example .env
 
 #### Using Docker Compose (Recommended)
 ```bash
+# Build the backend JAR using host Maven before building its Docker image
+cd backend
+mvn -DskipTests package
+cd ..
+
 docker compose up --build
 
 # Frontend: http://localhost:3000
 # Backend: http://localhost:8080
-# Python Service: http://localhost:8000
 # Database: localhost:5432
 # Redis: localhost:6379
 ```
+
+Docker Compose does not start the Python ML service. To use ML features, start
+the FastAPI service separately and set `PYTHON_SERVICE_URL` in `.env` to
+`http://host.docker.internal:8000`.
 
 #### Local Development (Without Docker)
 
@@ -194,7 +209,7 @@ cd ml-service
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn main:app --reload
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 **Frontend:**
@@ -353,11 +368,38 @@ JWT_EXPIRATION=86400
 SERVER_PORT=8080
 SERVER_ENV=development
 
-# Python Service
-PYTHON_SERVICE_URL=http://localhost:8000
+# Optional Python ML Service (when running separately from Docker Compose)
+PYTHON_SERVICE_URL=http://host.docker.internal:8000
 
 # Market Data Providers (optional)
 MARKET_DATA_PROVIDER=mock
+# Overnight Retrieve calls Upstox from Spring Boot and appends successful snapshots to PostgreSQL.
+# The frontend uses POST /api/overnight/retrieve; keep the access token server-side.
+# GET /api/overnight/global returns the saved quote snapshot used to hydrate the premarket page without calling Upstox.
+# GET /api/overnight/quotes returns saved quote results in the manual-retrieval response format.
+# The backend refreshes all configured instruments weekdays at 6:00 PM IST; override with OVERNIGHT_REFRESH_CRON.
+# The backend reads global index keys from data/global.json.gz and exchange futures from data/complete.json.gz when available.
+# Docker Compose mounts ./data read-only at /app/data; override paths with UPSTOX_GLOBAL_INSTRUMENT_MASTER_PATH and
+# UPSTOX_COMPLETE_INSTRUMENT_MASTER_PATH. If the local complete master is absent, the configured Upstox master URL is used.
+# Default instrument keys can be overridden:
+# GLOBAL_GIFT_NIFTY_INSTRUMENT_KEY=GLOBAL_INDEX|SGX NIFTY
+# GLOBAL_SP500_INSTRUMENT_KEY=GLOBAL_INDEX|^GSPC
+# GLOBAL_US_TECH_100_INSTRUMENT_KEY=GLOBAL_INDEX|IXIX
+# GLOBAL_DOW_INSTRUMENT_KEY=GLOBAL_INDEX|^DJI
+# GLOBAL_NIKKEI_INSTRUMENT_KEY=GLOBAL_INDEX|^N225
+# GLOBAL_HANG_SENG_INSTRUMENT_KEY=GLOBAL_INDEX|^HSI
+# USD/INR, Brent, and crude first try the NSE quote APIs, then fall back to
+# active Upstox contracts/instruments. Optional Upstox contract-key overrides:
+# contract-key overrides:
+# GLOBAL_USDINR_INSTRUMENT_KEY=NCD_FO|<current-NSE-contract-id>
+# GLOBAL_CRUDE_OIL_INSTRUMENT_KEY=NSE_COM|<current-NSE-contract-id>
+# GLOBAL_BRENT_INSTRUMENT_KEY=GLOBAL_INDICATOR|BZUSD
+# The crude-oil card is an Indian futures proxy, not Brent or WTI.
+# UPSTOX_OVERNIGHT_INSTRUMENT_MASTER_URL=https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz
+# OVERNIGHT_GLOBAL_INDEX_FRESHNESS_SECONDS=300
+# OVERNIGHT_GLOBAL_INDICATOR_FRESHNESS_SECONDS=900
+# Stale fallback is opt-in and disabled by default:
+# OVERNIGHT_STALE_FALLBACK_ENABLED=false
 # ALPHA_VANTAGE_KEY=<key>
 # POLYGON_IO_KEY=<key>
 # NSE_API_KEY=<key>

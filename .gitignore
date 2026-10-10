@@ -133,6 +133,7 @@ out/
 # ========================================
 docker-compose.override.yml
 .dockerignore
+!backend/.dockerignore
 docker-build.log
 
 # ========================================
