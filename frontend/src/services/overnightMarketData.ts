@@ -1,3 +1,5 @@
+import { API_BASE_URL } from '../config/api';
+
 export type OvernightRetrieveResult = {
   instrument: string;
   instrumentKey: string | null;
@@ -54,7 +56,7 @@ type SavedOvernightSnapshot = {
   brent: SavedOvernightQuote;
 };
 
-const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api';
+const API_BASE = API_BASE_URL;
 
 export async function loadSavedOvernightQuotes(): Promise<Record<string, OvernightRetrieveResult>> {
   const response = await fetch(`${API_BASE}/overnight/global`, {

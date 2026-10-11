@@ -1,3 +1,4 @@
+import { API_BASE_URL } from '../config/api';
 import { NIFTY50_SECTORS, NIFTY50_WEIGHTS } from '../data/nifty50';
 
 export const DEFAULT_POLL_INTERVAL = 30_000;
@@ -1377,8 +1378,8 @@ export function parseNiftyIndexCandles(payload: unknown, now = Date.now()): Nift
 
 export class NseMarketDataProvider {
   constructor(
-    private readonly baseUrl = `${import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api'}/nse`,
-    private readonly marketBaseUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api'
+    private readonly baseUrl = `${API_BASE_URL}/nse`,
+    private readonly marketBaseUrl = API_BASE_URL
   ) {}
 
   async getGiftNifty(): Promise<ProviderState<GiftNiftySnapshot>> {

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { getMarketWebSocketUrl } from '../config/api';
 import { api, Instrument, OptionOpportunityResponse, type ApiError, type Quote } from './api';
 
 // ============================================================
@@ -90,15 +91,7 @@ export type LiveMarketTick = {
 };
 
 function marketWebSocketUrl() {
-  const configured = import.meta.env.VITE_MARKET_WS_URL;
-  if (configured) return configured;
-
-  const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api';
-  const url = new URL(apiUrl, window.location.href);
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  url.pathname = '/ws/market';
-  url.search = '';
-  return url.toString();
+  return getMarketWebSocketUrl();
 }
 
 /**

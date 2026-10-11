@@ -1,5 +1,7 @@
 
-const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api';
+import { API_BASE_URL } from '../config/api';
+
+const API_BASE = API_BASE_URL;
 const ML_BASE = import.meta.env.VITE_ML_URL ?? 'http://localhost:5000';
 
 // ============================================================
