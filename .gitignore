@@ -58,6 +58,7 @@ application.properties
 application.yml
 application-*.properties
 application-*.yml
+!backend/src/main/resources/application.yml
 
 # ========================================
 # Python
@@ -69,7 +70,6 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -115,8 +115,6 @@ lerna-debug.log*
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
-dist/
-build/
 .next
 out/
 *.tsbuildinfo

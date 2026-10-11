@@ -1,0 +1,184 @@
+spring:
+  application:
+    name: trading-platform-backend
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/trading_platform
+    username: trading_user
+    password: ${DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+server:
+  port: 8080
+UPSTOX_INSTRUMENT_MASTER_URL: https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz
+UPSTOX_GLOBAL_INSTRUMENT_MASTER_PATH: /app/data/global.json.gz
+UPSTOX_COMPLETE_INSTRUMENT_MASTER_PATH: /app/data/complete.json.gz
+GROQ_MODEL: llama-3.3-70b-versatile
+trading:
+  trading-mode: PAPER
+  ml-service-url: http://host.docker.internal:8000
+  nse:
+    market-context:
+      poll-interval-ms: 30000
+      initial-delay-ms: 1000
+      stale-ms: 180000
+      window-tolerance-ms: 90000
+      max-observations: 2000
+  nifty:
+    primary-horizon-minutes: 15
+    movement-threshold-percent: 0.20
+  market-bias:
+    gap-threshold-pct: 0.15
+    flow-neutral-threshold-cr: 500
+    futures-oi-threshold-pct: 0.1
+    return-neutral-threshold-pct: 0.05
+    pcr-supportive-threshold: 1.1
+    pcr-bearish-threshold: 0.9
+    minimum-data-quality-pct: 70
+    minimum-aligned-groups: 3
+    maximum-opposing-groups: 1
+    group-weights:
+      global: 1
+      domestic: 1
+      technical: 1
+      options: 1
+      volatility: 1
+    vix-max-age-seconds: 180
+    flow-max-age-days: 7
+  options:
+    collection-enabled: false
+    collection-cron: 0 */5 9-15 * * MON-FRI
+    min-predicted-return-percent: 2.0
+    max-spread-percent: 10.0
+    min-volume: 1
+    min-open-interest: 1
+    max-distance-from-atm-percent: 1.5
+  MARKET_DATA_PROVIDER: upstox
+  mock:
+    instrument-key: MOCK|NIFTY25000CE
+    interval-ms: 1000
+    prices: 7.40,7.50,7.80,8.10,7.90
+  upstox:
+    UPSTOX_BASE_URL: https://api.upstox.com
+    UPSTOX_ACCESS_TOKEN: ${UPSTOX_ACCESS_TOKEN:-}
+    UPSTOX_CLIENT_ID: ${UPSTOX_CLIENT_ID:-}
+    UPSTOX_CLIENT_SECRET: ${UPSTOX_CLIENT_SECRET:-}
+    UPSTOX_REDIRECT_URI: https://miniproject-7893.web.app/
+    request-timeout-seconds: 10
+    overnight-instrument-master-url: https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz
+    instruments:
+      gift-nifty: GLOBAL_INDEX|SGX NIFTY
+      sp500: GLOBAL_INDEX|^GSPC
+      us-tech-100: GLOBAL_INDEX|IXIX
+      dow: GLOBAL_INDEX|^DJI
+      nikkei: GLOBAL_INDEX|^N225
+      hang-seng: GLOBAL_INDEX|^HSI
+      usd-inr: ""
+      crude-oil: ""
+      brent: ""
+      wti: ""
+
+    websocket:
+      enabled: true
+      mode: ltpc
+      instruments: ""
+      reconnect-enabled: true
+      reconnect-interval-seconds: 5
+      reconnect-attempts: 10
+  overnight:
+    refresh-cron: 0 0 18 * * MON-FRI
+    freshness:
+      global-index-seconds: 300
+      global-indicator-seconds: 900
+      provider-future-skew-seconds: 5
+    stale-fallback-enabled: false
+  
+  news:
+    provider: marketaux
+    marketaux:
+      base-url: https://api.marketaux.com
+      api-key: ${NEWS_API_KEY:}
+      country: in
+      language: en
+      limit: 3
+  signal:
+    buy-threshold: 75
+    sell-threshold: 25
+    atr-stop-multiplier: 1.5
+    reward-multiple: 2.0
+  cache:
+    quote-ttl-seconds: 150
+    candle-ttl-seconds: 3600
+    intraday-candle-ttl-seconds: 300
+  analysis:
+    intraday-history-days: 10
+    intraday-window-candles: 500
+  global:
+    quote-max-age-seconds: 900
+    instruments:
+      gift-nifty: ""
+      sp500: ""
+      nasdaq: ""
+      dow: ""
+      asian-market: ""
+      india-vix: ""
+      usd-inr: ""
+      crude: ""
+      gold: ""
+      us10y: ""
+  paper:
+    enabled: true
+    forecast-enabled: true
+    forecast-min-confidence: 0.60
+    auto-trading: true
+    automation:
+      enabled: true
+      interval-ms: 60000
+      idempotency-minutes: 5
+      max-loss-percent: 1
+      max-exposure-percent: 20
+      max-context-age-seconds: 180
+      max-entry-deviation-percent: 2
+      max-spot-divergence-percent: 0.2
+      max-spread-percent: 3
+      min-volume: 100
+      min-open-interest: 1000
+      max-atm-distance-percent: 1
+      min-abs-delta: 0.25
+      max-abs-delta: 0.75
+      max-stop-loss-percent: 30
+      reward-risk-multiple: 2
+      min-risk-reward: 1.5
+    initial-balance: 100000
+    max-daily-loss: 300
+    max-allocation-per-trade: 5000
+    max-position-quantity: 1000
+    max-open-positions: 10
+    max-trades-per-day: 50
+    max-price-age-seconds: 30
+    slippage-percent: 0.05
+    charges:
+      brokerage-rate: 0.0003
+  decision:
+    minimum-score: 70
+    minimum-risk-reward: 1.5
+    risk-per-trade-percent: 1
+  prediction:
+    enabled: true
+    interval-ms: 300000
+    horizon-minutes: 15
+    threshold-percent: 0.20
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true

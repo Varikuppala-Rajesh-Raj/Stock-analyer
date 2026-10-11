@@ -8,8 +8,8 @@ services:
     container_name: trading-platform-db
 
     environment:
-      POSTGRES_DB: ${DB_NAME:-trading_platform}
-      POSTGRES_USER: ${DB_USER:-trading_user}
+      POSTGRES_DB: trading_platform
+      POSTGRES_USER: trading_user
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8"
       PGDATA: /var/lib/postgresql/data/pgdata
@@ -25,7 +25,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${DB_USER:-trading_user} -d ${DB_NAME:-trading_platform}"
+          "pg_isready -U trading_user -d trading_platform"
         ]
       interval: 10s
       timeout: 5s
@@ -68,116 +68,18 @@ services:
     container_name: trading-platform-backend
 
     environment:
-      SPRING_PROFILES_ACTIVE: docker
-      SERVER_PORT: 8080
-
-      # PostgreSQL
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-trading_platform}
-      DB_USER: ${DB_USER:-trading_user}
       DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
-
-      # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
-
-      # Security
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
-
-      # Optional Python ML service running separately on the host
-      PYTHON_SERVICE_URL: ${PYTHON_SERVICE_URL:-http://host.docker.internal:8000}
-
-      # ========================================
-      # Market Data
-      # ========================================
-      MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-mock}
-      TRADING_OPTIONS_COLLECTION_ENABLED: ${TRADING_OPTIONS_COLLECTION_ENABLED:-false}
-      MARKET_BIAS_GAP_THRESHOLD_PCT: ${MARKET_BIAS_GAP_THRESHOLD_PCT:-0.15}
-      MARKET_BIAS_FLOW_NEUTRAL_THRESHOLD_CR: ${MARKET_BIAS_FLOW_NEUTRAL_THRESHOLD_CR:-500}
-      MARKET_BIAS_FUTURES_OI_THRESHOLD_PCT: ${MARKET_BIAS_FUTURES_OI_THRESHOLD_PCT:-0.1}
-      MARKET_BIAS_RETURN_NEUTRAL_THRESHOLD_PCT: ${MARKET_BIAS_RETURN_NEUTRAL_THRESHOLD_PCT:-0.05}
-      MARKET_BIAS_PCR_SUPPORTIVE_THRESHOLD: ${MARKET_BIAS_PCR_SUPPORTIVE_THRESHOLD:-1.1}
-      MARKET_BIAS_PCR_BEARISH_THRESHOLD: ${MARKET_BIAS_PCR_BEARISH_THRESHOLD:-0.9}
-      MARKET_BIAS_MINIMUM_DATA_QUALITY_PCT: ${MARKET_BIAS_MINIMUM_DATA_QUALITY_PCT:-70}
-      MARKET_BIAS_MINIMUM_ALIGNED_GROUPS: ${MARKET_BIAS_MINIMUM_ALIGNED_GROUPS:-3}
-      MARKET_BIAS_MAXIMUM_OPPOSING_GROUPS: ${MARKET_BIAS_MAXIMUM_OPPOSING_GROUPS:-1}
-      MARKET_BIAS_GLOBAL_WEIGHT: ${MARKET_BIAS_GLOBAL_WEIGHT:-1}
-      MARKET_BIAS_DOMESTIC_WEIGHT: ${MARKET_BIAS_DOMESTIC_WEIGHT:-1}
-      MARKET_BIAS_TECHNICAL_WEIGHT: ${MARKET_BIAS_TECHNICAL_WEIGHT:-1}
-      MARKET_BIAS_OPTIONS_WEIGHT: ${MARKET_BIAS_OPTIONS_WEIGHT:-1}
-      MARKET_BIAS_VOLATILITY_WEIGHT: ${MARKET_BIAS_VOLATILITY_WEIGHT:-1}
-      MARKET_BIAS_VIX_MAX_AGE_SECONDS: ${MARKET_BIAS_VIX_MAX_AGE_SECONDS:-180}
-      MARKET_BIAS_FLOW_MAX_AGE_DAYS: ${MARKET_BIAS_FLOW_MAX_AGE_DAYS:-7}
-
-      # Mock stream
-      MOCK_INSTRUMENT_KEY: ${MOCK_INSTRUMENT_KEY:-MOCK|NIFTY25000CE}
-      MOCK_DATA_INTERVAL_MS: ${MOCK_DATA_INTERVAL_MS:-1000}
-      MOCK_DATA_PRICES: ${MOCK_DATA_PRICES:-7.40,7.50,7.80,8.10,7.90}
-
-      # ========================================
-      # Upstox
-      # ========================================
-      UPSTOX_BASE_URL: ${UPSTOX_BASE_URL:-https://api.upstox.com}
       UPSTOX_ACCESS_TOKEN: ${UPSTOX_ACCESS_TOKEN:-}
       UPSTOX_CLIENT_ID: ${UPSTOX_CLIENT_ID:-}
       UPSTOX_CLIENT_SECRET: ${UPSTOX_CLIENT_SECRET:-}
-      UPSTOX_REDIRECT_URI: ${UPSTOX_REDIRECT_URI:-}
-      UPSTOX_WEBSOCKET_ENABLED: ${UPSTOX_WEBSOCKET_ENABLED:-true}
-      UPSTOX_INSTRUMENT_MASTER_URL: ${UPSTOX_INSTRUMENT_MASTER_URL:-}
-      UPSTOX_OVERNIGHT_INSTRUMENT_MASTER_URL: ${UPSTOX_OVERNIGHT_INSTRUMENT_MASTER_URL:-https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz}
-      UPSTOX_GLOBAL_INSTRUMENT_MASTER_PATH: ${UPSTOX_GLOBAL_INSTRUMENT_MASTER_PATH:-/app/data/global.json.gz}
-      UPSTOX_COMPLETE_INSTRUMENT_MASTER_PATH: ${UPSTOX_COMPLETE_INSTRUMENT_MASTER_PATH:-/app/data/complete.json.gz}
-      GLOBAL_USDINR_INSTRUMENT_KEY: ${GLOBAL_USDINR_INSTRUMENT_KEY:-}
-      GLOBAL_CRUDE_OIL_INSTRUMENT_KEY: ${GLOBAL_CRUDE_OIL_INSTRUMENT_KEY:-}
-
-      # ========================================
-      # Groq
-      # ========================================
       GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
-
-      # ========================================
-      # Trading
-      # ========================================
-      TRADING_MODE: ${TRADING_MODE:-PAPER}
-
-      # News intelligence
-      NEWS_PROVIDER: ${NEWS_PROVIDER:-marketaux}
       NEWS_API_KEY: ${NEWS_API_KEY:-}
-      MARKETAUX_BASE_URL: ${MARKETAUX_BASE_URL:-https://api.marketaux.com}
-      NEWS_COUNTRY: ${NEWS_COUNTRY:-in}
-      NEWS_LANGUAGE: ${NEWS_LANGUAGE:-en}
-      NEWS_LIMIT: ${NEWS_LIMIT:-3}
-
-      PAPER_TRADING_INITIAL_CAPITAL: ${PAPER_TRADING_INITIAL_CAPITAL:-100000}
-      PAPER_TRADING_ENABLED: ${PAPER_TRADING_ENABLED:-true}
-      PAPER_AUTO_TRADING: ${PAPER_AUTO_TRADING:-false}
-
-      INITIAL_VIRTUAL_BALANCE: ${INITIAL_VIRTUAL_BALANCE:-100000}
-
-      # ========================================
-      # Paper Risk Management
-      # ========================================
-      MAX_DAILY_LOSS: ${MAX_DAILY_LOSS:-300}
-      MAX_CAPITAL_PER_TRADE: ${MAX_CAPITAL_PER_TRADE:-5000}
-      MAX_POSITION_QUANTITY: ${MAX_POSITION_QUANTITY:-1000}
-      MAX_OPEN_POSITIONS: ${MAX_OPEN_POSITIONS:-10}
-      MAX_TRADES_PER_DAY: ${MAX_TRADES_PER_DAY:-50}
-      MAX_PRICE_AGE_SECONDS: ${MAX_PRICE_AGE_SECONDS:-30}
-
-      # ========================================
-      # Paper Trading Costs
-      # ========================================
-      PAPER_SLIPPAGE_PERCENT: ${PAPER_SLIPPAGE_PERCENT:-0}
-      PAPER_BROKERAGE_RATE: ${PAPER_BROKERAGE_RATE:-0.0003}
-
-      # ========================================
-      # Logging
-      # ========================================
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      ML_MODEL_DIR: /app/models
 
     ports:
       - "8080:8080"
