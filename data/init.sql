@@ -1,0 +1,2 @@
+-- Persistent schema migrations will be introduced with the backend persistence phase.
+-- This intentionally contains no seeded prices: demo data must never be represented as live data.

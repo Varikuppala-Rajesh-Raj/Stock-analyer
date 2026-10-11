@@ -140,7 +140,6 @@ docker-build.log
 *.db
 *.sqlite
 *.sqlite3
-data/
 postgres_data/
 redis_data/
 *.sql.backup
